@@ -1,0 +1,73 @@
+# Application settings
+# log_level             -> Log verbosity level
+[app]
+log_level = "debug"
+
+
+# Host settings
+# port                  -> Port to run the server on
+# domain                -> Domain used to host the server on
+[host]
+port = 8080
+domain = "localhost"
+
+
+# SSL settings
+# enabled               -> Toggles secure connections (https)
+# certificate_path      -> Path to your SSL certificate
+# certificate_key_path  -> Path to your SSL certificate key
+[host.ssl]
+enabled = false
+certificate_path = ""
+certificate_key_path = ""
+
+
+# FFmpeg settings
+# path                  -> Path to your ffmpeg install (not needed if in $PATH)
+# hwaccel_flags         -> Hardware acceleration flags (disabled if not set)
+[ffmpeg]
+path = ""
+hwaccel_flags = ""
+
+
+# JWT settings
+# secret                -> Secret string used for token encoding/validation
+[jwt]
+secret = ""
+
+
+# Storage settings
+# type                  -> Type of storage to use (e.g., "local", "s3")
+# max_usage             -> Maximum usage in bytes allowed for storage
+[storage]
+type = "s3"
+max_usage = 10_000_000_000
+
+
+# Upload settings
+# max_size              -> Maximum file size for uploads
+# allowed_types         -> List of allowed file types for uploading.
+# NOTE: File types other than the ones provided by default aren't supported yet.
+[upload]
+max_size = 500
+allowed_types = ["video/mp4"]
+
+
+# Cloudflare settings
+# account_id            -> Your Cloudflare account ID
+# access_key_id         -> Cloudflare API access key ID
+# secret_access_key     -> Cloudflare API secret access key
+# bucket                -> Name of the Cloudflare R2 bucket to use for storage
+[cloudflare]
+account_id = ""
+access_key_id = ""
+secret_access_key = ""
+bucket = ""
+
+
+# Turnstile settings
+# enabled               -> Toggles turnstile
+# secret_token          -> Used to validate challenge results to avoid bots
+[cloudflare.turnstile]
+enabled = false
+secret_token = ""
