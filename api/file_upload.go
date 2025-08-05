@@ -24,7 +24,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const tenMB = 10 << 20
+const multipartLimit = 100 << 20
 
 func (a *API) FileUpload(c *gin.Context) {
 	requestID := c.MustGet("requestID").(string)
@@ -59,9 +59,6 @@ func (a *API) FileUpload(c *gin.Context) {
 	}
 
 	fh := files[0]
-
-	ext := path.Ext(fh.Filename)
-	fh.Filename = util.RandStr(10) + ext
 
 	code, f, err := validators.FileValidator(fh, a.DB, userID)
 	if err != nil {
@@ -114,6 +111,8 @@ func (a *API) FileUpload(c *gin.Context) {
 	var wg sync.WaitGroup
 	wg.Add(3)
 
+	var thumbSize int64 = 0
+
 	// Make and upload the thumbnail in the background
 	go func() {
 		defer wg.Done()
@@ -153,6 +152,7 @@ func (a *API) FileUpload(c *gin.Context) {
 
 		errChan <- nil
 		uploadedIDs = append(uploadedIDs, thumbName)
+		thumbSize = stat.Size()
 
 		err = a.DB.
 			Create(&model.File{
@@ -174,9 +174,13 @@ func (a *API) FileUpload(c *gin.Context) {
 	// Upload file to R2
 	go func() {
 		defer wg.Done()
+		now := time.Now()
+
 		var err error
 
-		if fh.Size > tenMB {
+		zap.L().Debug("Starting video upload")
+
+		if fh.Size > multipartLimit {
 			u := manager.NewUploader(a.R2.C, func(u *manager.Uploader) {
 				u.Concurrency = 5
 				u.PartSize = 5 << 20
@@ -207,6 +211,8 @@ func (a *API) FileUpload(c *gin.Context) {
 
 		errChan <- nil
 		uploadedIDs = append(uploadedIDs, r2Key)
+
+		zap.L().Debug("File uploaded", zap.Duration("took", time.Since(now)))
 	}()
 
 	// Get video duration and save stuff to DB
@@ -222,6 +228,8 @@ func (a *API) FileUpload(c *gin.Context) {
 			zap.L().Error("Failed to get video duration", zap.Error(err))
 			return
 		}
+
+		zap.L().Debug("Creating database entry for uploaded file")
 
 		fileRecord := model.File{
 			UserID:       userID,
@@ -283,8 +291,8 @@ func (a *API) FileUpload(c *gin.Context) {
 	err = a.DB.
 		Model(model.Stats{}).
 		Where("user_id = ?", userID).
-		Updates(map[string]interface{}{
-			"used_storage":   gorm.Expr("used_storage + ?", fh.Size),
+		Updates(map[string]any{
+			"used_storage":   gorm.Expr("used_storage + ?", fh.Size+thumbSize),
 			"uploaded_files": gorm.Expr("uploaded_files + ?", 1),
 		}).
 		Error

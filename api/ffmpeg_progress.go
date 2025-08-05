@@ -1,21 +1,19 @@
 package api
 
 import (
+	"bitwise74/video-api/service"
 	"fmt"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-var progressMap = sync.Map{}
-
 func (a *API) FFmpegProgress(c *gin.Context) {
 	requestID := c.MustGet("requestID").(string)
 	userID := c.MustGet("userID").(string)
 
-	if _, ok := progressMap.Load(userID); !ok {
+	if _, ok := service.ProgressMap.Load(userID); !ok {
 		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{
 			"error":     "No running jobs found",
 			"requestID": requestID,
@@ -29,15 +27,15 @@ func (a *API) FFmpegProgress(c *gin.Context) {
 
 	ticker := time.NewTicker(time.Millisecond * 200)
 	defer ticker.Stop()
-	defer progressMap.Delete(userID)
+	defer service.ProgressMap.Delete(userID)
 
 	for range ticker.C {
-		val, ok := progressMap.Load(userID)
+		val, ok := service.ProgressMap.Load(userID)
 		if !ok {
 			continue
 		}
 
-		v := val.(FFMpegJobStats)
+		v := val.(service.FFMpegJobStats)
 
 		fmt.Fprintf(c.Writer, "data: %.2f\n\n", v.Progress)
 		c.Writer.Flush()

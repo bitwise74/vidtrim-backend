@@ -14,8 +14,8 @@ import (
 )
 
 type deleteInfo struct {
-	r2Key string
-	size  int
+	R2Key string
+	Size  int
 }
 
 func (a *API) FileDelete(c *gin.Context) {
@@ -36,8 +36,8 @@ func (a *API) FileDelete(c *gin.Context) {
 	err := a.DB.
 		Model(model.File{}).
 		Where("user_id = ? AND id = ?", userID, fileID).
-		Select("r2_key, size").
-		Find(info).
+		Select("r2_key, size + COALESCE(thumbnail_size, 0) AS size").
+		Find(&info).
 		Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -58,7 +58,7 @@ func (a *API) FileDelete(c *gin.Context) {
 	}
 
 	err = a.DB.
-		Where("r2_key = ?", info.r2Key).
+		Where("r2_key IN ?", []string{info.R2Key, "thumb_" + info.R2Key}).
 		Delete(model.File{}).
 		Error
 	if err != nil {
@@ -71,15 +71,15 @@ func (a *API) FileDelete(c *gin.Context) {
 		return
 	}
 
-	_, err = a.R2.C.DeleteObjects(context.TODO(), &s3.DeleteObjectsInput{
+	resp, err := a.R2.C.DeleteObjects(context.TODO(), &s3.DeleteObjectsInput{
 		Bucket: a.R2.Bucket,
 		Delete: &types.Delete{
 			Objects: []types.ObjectIdentifier{
 				{
-					Key: &info.r2Key,
+					Key: &info.R2Key,
 				},
 				{
-					Key: aws.String("thumbnail_" + info.r2Key),
+					Key: aws.String("thumbnail_" + info.R2Key),
 				},
 			},
 		},
@@ -94,10 +94,17 @@ func (a *API) FileDelete(c *gin.Context) {
 		return
 	}
 
+	for _, v := range resp.Deleted {
+		zap.L().Debug("Deleted item", zap.String("item", *v.Key))
+	}
+
 	err = a.DB.
 		Model(model.Stats{}).
 		Where("user_id = ?", userID).
-		Update("used_storage", gorm.Expr("used_storage - ?", info.size)).
+		Updates(map[string]any{
+			"used_storage":   gorm.Expr("used_storage - ?", info.Size),
+			"uploaded_files": gorm.Expr("uploaded_files - ?", 1),
+		}).
 		Error
 	if err != nil {
 		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{

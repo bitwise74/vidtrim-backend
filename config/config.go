@@ -11,6 +11,7 @@ import (
 	"slices"
 
 	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
 	v "github.com/spf13/viper"
 	"go.uber.org/zap"
 )
@@ -55,6 +56,8 @@ func Setup() error {
 
 	v.BindEnv("ffmpeg.path", "ffmpeg_path")
 	v.BindEnv("ffmpeg.hwaccel_flags", "ffmpeg_hwaccel_flags")
+	v.BindEnv("ffmpeg.max_jobs", "ffmpeg_max_jobs")
+	v.BindEnv("ffmpeg.workers", "ffmpeg_workers")
 
 	v.BindEnv("jwt.secret", "jwt_secret")
 
@@ -117,6 +120,14 @@ func Setup() error {
 		if v.GetString("host.ssl.certificate_key_path") == "" {
 			return errors.New("no ssl certificate key path provided")
 		}
+	}
+
+	if viper.GetInt("ffmpeg.max_jobs") <= 0 {
+		return errors.New("max job queue size must be at least 1")
+	}
+
+	if viper.GetInt("ffmpeg.workers") <= 0 {
+		return errors.New("ffmpeg workers must be set to at least 1")
 	}
 
 	if v.GetString("jwt.secret") == "" {

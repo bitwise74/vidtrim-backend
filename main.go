@@ -5,6 +5,7 @@ import (
 	"bitwise74/video-api/config"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 func main() {
@@ -20,5 +21,10 @@ func main() {
 		panic(err)
 	}
 
-	a.Router.Run(":8080")
+	zap.L().Info("Server starting")
+
+	err = a.Router.Run(":8080")
+	if err != nil {
+		panic(err)
+	}
 }

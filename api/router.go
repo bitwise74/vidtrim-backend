@@ -6,6 +6,7 @@ import (
 	"bitwise74/video-api/db"
 	"bitwise74/video-api/middleware"
 	"bitwise74/video-api/security"
+	"bitwise74/video-api/service"
 	"fmt"
 	"time"
 
@@ -29,14 +30,17 @@ const (
 var store = persist.NewMemoryStore(time.Minute)
 
 type API struct {
-	DB     *gorm.DB
-	Router *gin.Engine
-	Argon  *security.ArgonHash
-	R2     *cloudflare.R2Client
+	DB       *gorm.DB
+	Router   *gin.Engine
+	Argon    *security.ArgonHash
+	R2       *cloudflare.R2Client
+	JobQueue *service.JobQueue
 }
 
 func NewRouter() (*API, error) {
-	a := &API{}
+	a := &API{
+		JobQueue: service.NewJobQueue(),
+	}
 
 	db, err := db.New()
 	if err != nil {
@@ -148,6 +152,7 @@ func NewRouter() (*API, error) {
 	}
 
 	a.R2 = s3
+	a.JobQueue.StartWorkerPool()
 
 	return a, nil
 }

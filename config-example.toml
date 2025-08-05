@@ -25,10 +25,13 @@ certificate_key_path = ""
 # FFmpeg settings
 # path                  -> Path to your ffmpeg install (not needed if in $PATH)
 # hwaccel_flags         -> Hardware acceleration flags (disabled if not set)
+# max_jobs              -> Max amount of jobs that cna be in the queue
+# workers               -> Max amount of concurrent jobs to run
 [ffmpeg]
 path = ""
 hwaccel_flags = ""
-
+max_jobs = 20
+workers = 4
 
 # JWT settings
 # secret                -> Secret string used for token encoding/validation

@@ -22,6 +22,9 @@ type File struct {
 	Format  string `json:"format"`
 	Views   int32  `json:"views"`
 	Size    int64  `json:"size"`
+	// Needed for correct stat calculations but not shown to the user. Thumbnails aren't taken into
+	// account for files to not confuse people on the space used being "invalid"
+	ThumbnailSize int64 `json:"-"`
 	// Used to inform the frontend/backend if the file is being processed/uploaded
 	State string `json:"state"`
 	// All are unix millisecond timestamps
