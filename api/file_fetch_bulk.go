@@ -94,6 +94,7 @@ func (a *API) FileFetchBulk(c *gin.Context) {
 
 	err = a.DB.
 		Where("user_id = ?", userID).
+		Not("original_name LIKE ?", "%.webp").
 		Order(order).
 		Offset(offset).
 		Limit(limit).

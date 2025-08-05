@@ -117,7 +117,7 @@ func NewRouter() (*API, error) {
 	files := main.Group("/files")
 	{
 		// GET /api/files/:name 	-> Serves a file directly
-		files.GET("/:videoID", cacheFor(60), a.FileServe)
+		files.GET("/:fileID", a.FileServe)
 
 		// GET /api/files/bulk 		-> Returns a user's files in bulk
 		files.GET("/bulk", jwt, a.FileFetchBulk)

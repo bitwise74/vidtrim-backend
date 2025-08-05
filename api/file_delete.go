@@ -13,6 +13,11 @@ import (
 	"gorm.io/gorm"
 )
 
+type deleteInfo struct {
+	r2Key string
+	size  int
+}
+
 func (a *API) FileDelete(c *gin.Context) {
 	requestID := c.MustGet("requestID").(string)
 	userID := c.MustGet("userID").(string)
@@ -26,13 +31,13 @@ func (a *API) FileDelete(c *gin.Context) {
 		return
 	}
 
-	var r2Key string
+	var info deleteInfo
 
 	err := a.DB.
 		Model(model.File{}).
 		Where("user_id = ? AND id = ?", userID, fileID).
-		Select("r2_key").
-		Find(&r2Key).
+		Select("r2_key, size").
+		Find(info).
 		Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -53,7 +58,7 @@ func (a *API) FileDelete(c *gin.Context) {
 	}
 
 	err = a.DB.
-		Where("r2_key = ?", r2Key).
+		Where("r2_key = ?", info.r2Key).
 		Delete(model.File{}).
 		Error
 	if err != nil {
@@ -71,10 +76,10 @@ func (a *API) FileDelete(c *gin.Context) {
 		Delete: &types.Delete{
 			Objects: []types.ObjectIdentifier{
 				{
-					Key: &r2Key,
+					Key: &info.r2Key,
 				},
 				{
-					Key: aws.String("thumbnail_" + r2Key),
+					Key: aws.String("thumbnail_" + info.r2Key),
 				},
 			},
 		},
@@ -86,6 +91,21 @@ func (a *API) FileDelete(c *gin.Context) {
 		})
 
 		zap.L().Error("Failed to delete file from S3", zap.Error(err))
+		return
+	}
+
+	err = a.DB.
+		Model(model.Stats{}).
+		Where("user_id = ?", userID).
+		Update("used_storage", gorm.Expr("used_storage - ?", info.size)).
+		Error
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+			"error":     "Internal server error",
+			"requestID": requestID,
+		})
+
+		zap.L().Error("Failed to decrement user's used storage", zap.Error(err))
 		return
 	}
 

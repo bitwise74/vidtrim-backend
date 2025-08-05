@@ -6,9 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"path"
 	"strconv"
-	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -20,11 +18,10 @@ import (
 // FileServe serves a file for viewing on a webiste or in a browser directly from the CDN
 func (a *API) FileServe(c *gin.Context) {
 	requestID := c.MustGet("requestID").(string)
-
-	videoID := c.Param("videoID")
-	if videoID == "" {
+	fileID := c.Param("fileID")
+	if fileID == "" {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
-			"error":     "No video ID provided",
+			"error":     "No file ID provided",
 			"requestID": requestID,
 		})
 		return
@@ -36,13 +33,13 @@ func (a *API) FileServe(c *gin.Context) {
 		thumb = true
 	}
 
-	var filename string
+	var r2ID string
 
 	err = a.DB.
 		Model(model.File{}).
-		Where("id = ?", videoID).
-		Select("name").
-		Find(&filename).
+		Where("id = ?", fileID).
+		Select("r2_key").
+		Find(&r2ID).
 		Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -58,21 +55,21 @@ func (a *API) FileServe(c *gin.Context) {
 			"requestID": requestID,
 		})
 
-		zap.L().Error("Failed to check if file exists", zap.String("id", videoID), zap.Error(err))
+		zap.L().Error("Failed to check if file exists", zap.String("id", fileID), zap.Error(err))
 		return
 	}
 
 	cType := "video/mp4"
 
 	if thumb {
-		filename = "thumb_" + strings.TrimSuffix(filename, path.Ext(filename)) + ".webp"
+		r2ID = "thumb_" + r2ID
 		cType = "image/webp"
 		c.Header("Cache-Control", "public, max-age=31536000, immutable")
 	}
 
 	input := &s3.GetObjectInput{
 		Bucket: a.R2.Bucket,
-		Key:    aws.String(filename),
+		Key:    aws.String(r2ID),
 	}
 
 	result, err := a.R2.C.GetObject(context.Background(), input)
@@ -95,7 +92,7 @@ func (a *API) FileServe(c *gin.Context) {
 			"requestID": requestID,
 		})
 
-		zap.L().Error("Failed to copy file buffer to context writer", zap.String("id", videoID), zap.Error(err))
+		zap.L().Error("Failed to copy file buffer to context writer", zap.String("id", fileID), zap.Error(err))
 		return
 	}
 }

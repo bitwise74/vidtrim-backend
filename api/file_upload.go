@@ -13,14 +13,15 @@ import (
 	"os"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 const tenMB = 10 << 20
@@ -31,7 +32,7 @@ func (a *API) FileUpload(c *gin.Context) {
 
 	if !strings.HasPrefix(c.Request.Header.Get("Content-Type"), "multipart/form-data") {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
-			"error":     "Invalid request, use multipart/form-data",
+			"error":     "Invalid request",
 			"requestID": requestID,
 		})
 		return
@@ -102,7 +103,7 @@ func (a *API) FileUpload(c *gin.Context) {
 	}
 
 	f.Seek(0, io.SeekStart)
-	r2Key := uuid.NewString()
+	r2Key := util.RandStr(7)
 
 	errChan := make(chan error, 3)
 	uploadedIDs := make([]string, 2)
@@ -110,12 +111,14 @@ func (a *API) FileUpload(c *gin.Context) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	var wg sync.WaitGroup
+	wg.Add(3)
+
 	// Make and upload the thumbnail in the background
 	go func() {
-		zap.L().Debug("Creating thumbnail for uploaded video")
-
+		defer wg.Done()
 		thumbName := "thumb_" + r2Key
-		thumbPath := path.Join(os.TempDir(), thumbName)
+		thumbPath := path.Join(os.TempDir(), thumbName) + ".webp"
 
 		err := service.MakeThumbnail(temp, thumbPath)
 		if err != nil {
@@ -131,7 +134,6 @@ func (a *API) FileUpload(c *gin.Context) {
 		}
 
 		stat, err := file.Stat()
-
 		if err != nil {
 			errChan <- fmt.Errorf("failed to stat dest file, %w", err)
 			return
@@ -139,7 +141,7 @@ func (a *API) FileUpload(c *gin.Context) {
 
 		_, err = a.R2.C.PutObject(ctx, &s3.PutObjectInput{
 			Bucket:        a.R2.Bucket,
-			Key:           &fh.Filename,
+			Key:           &thumbName,
 			Body:          file,
 			ContentType:   aws.String("image/webp"),
 			ContentLength: aws.Int64(stat.Size()),
@@ -151,14 +153,34 @@ func (a *API) FileUpload(c *gin.Context) {
 
 		errChan <- nil
 		uploadedIDs = append(uploadedIDs, thumbName)
+
+		err = a.DB.
+			Create(&model.File{
+				R2Key:        thumbName,
+				UserID:       userID,
+				OriginalName: thumbName + ".webp",
+				Format:       "image/webp",
+				CreatedAt:    time.Now().Unix(),
+			}).
+			Error
+		if err != nil {
+			errChan <- fmt.Errorf("failed to create database record, %w", err)
+			return
+		}
+
+		errChan <- nil
 	}()
 
 	// Upload file to R2
 	go func() {
+		defer wg.Done()
 		var err error
 
 		if fh.Size > tenMB {
-			u := manager.NewUploader(a.R2.C, nil)
+			u := manager.NewUploader(a.R2.C, func(u *manager.Uploader) {
+				u.Concurrency = 5
+				u.PartSize = 5 << 20
+			})
 
 			_, err = u.Upload(ctx, &s3.PutObjectInput{
 				Bucket:        a.R2.Bucket,
@@ -189,6 +211,7 @@ func (a *API) FileUpload(c *gin.Context) {
 
 	// Get video duration and save stuff to DB
 	go func() {
+		defer wg.Done()
 		duration, err := service.GetDuration(temp.Name())
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
@@ -220,9 +243,11 @@ func (a *API) FileUpload(c *gin.Context) {
 			})
 			return
 		}
+
+		errChan <- nil
 	}()
 
-	for range len(errChan) {
+	for range 3 {
 		err := <-errChan
 		if err != nil {
 			cancel()
@@ -233,7 +258,6 @@ func (a *API) FileUpload(c *gin.Context) {
 				"requestID": requestID,
 			})
 
-			// Cleanup any potential uploads
 			if len(uploadedIDs) != 0 {
 				for _, id := range uploadedIDs {
 					_, err := a.R2.C.DeleteObject(context.Background(), &s3.DeleteObjectInput{
@@ -244,13 +268,34 @@ func (a *API) FileUpload(c *gin.Context) {
 						zap.L().Error("Failed to cleanup after failed upload", zap.Error(err))
 						return
 					}
-
 					zap.L().Debug("Cleaned up after failed upload", zap.String("id", id))
 				}
 			}
 
 			return
 		}
+	}
+
+	// Don't let cancel run prematurely
+	wg.Wait()
+
+	// And after everything is done increment the amount of used storage
+	err = a.DB.
+		Model(model.Stats{}).
+		Where("user_id = ?", userID).
+		Updates(map[string]interface{}{
+			"used_storage":   gorm.Expr("used_storage + ?", fh.Size),
+			"uploaded_files": gorm.Expr("uploaded_files + ?", 1),
+		}).
+		Error
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+			"error":     "Internal server error",
+			"requestID": requestID,
+		})
+
+		zap.L().Error("Failed to increment user's used storage", zap.Error(err))
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{

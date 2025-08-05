@@ -3,6 +3,7 @@
 package service
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -20,9 +21,12 @@ func MakeThumbnail(temp *os.File, dest string) error {
 	// (uses key-frame seeking so that it's faster)
 	cmd := exec.Command("ffmpeg", "-loglevel", "error", "-ss", "0", "-i", temp.Name(), "-frames:v", "1", "-q:v", "2", "-vf", "scale=-1:320", dest, "-y")
 
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
 	err := cmd.Run()
 	if err != nil {
-		// TODO: add ffmpeg error dump
+		zap.L().Error("FFmpeg command failed", zap.String("output", stderr.String()))
 		return fmt.Errorf("failed to create thumbnail for video, %w", err)
 	}
 

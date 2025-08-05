@@ -22,7 +22,7 @@ func (a *API) UserFetch(c *gin.Context) {
 	var videos []model.File
 
 	err := a.DB.
-		Where("user_id = ?", userID).
+		Where("user_id = ? AND r2_key NOT LIKE ?", userID, "thumb%").
 		Limit(20).
 		Find(&videos).
 		Error
