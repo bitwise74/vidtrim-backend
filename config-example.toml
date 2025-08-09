@@ -9,7 +9,7 @@ log_level = "debug"
 # domain                -> Domain used to host the server on
 [host]
 port = 8080
-domain = "localhost"
+domain = "localhost:5173"
 
 
 # SSL settings
