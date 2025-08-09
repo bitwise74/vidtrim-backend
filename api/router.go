@@ -2,7 +2,7 @@
 package api
 
 import (
-	"bitwise74/video-api/cloudflare"
+	"bitwise74/video-api/aws"
 	"bitwise74/video-api/db"
 	"bitwise74/video-api/middleware"
 	"bitwise74/video-api/security"
@@ -33,13 +33,14 @@ type API struct {
 	DB       *gorm.DB
 	Router   *gin.Engine
 	Argon    *security.ArgonHash
-	R2       *cloudflare.R2Client
+	S3       *aws.S3Client
 	JobQueue *service.JobQueue
 }
 
 func NewRouter() (*API, error) {
 	a := &API{
 		JobQueue: service.NewJobQueue(),
+		Router:   gin.New(),
 	}
 
 	db, err := db.New()
@@ -49,16 +50,16 @@ func NewRouter() (*API, error) {
 	a.DB = db
 
 	makeLogger()
+	origins := makeOrigins()
 
-	router := gin.New()
-	a.Router = router
+	zap.L().Debug("Configured cors origins", zap.Strings("origins", origins))
 
-	router.Use(
+	a.Router.Use(
 		cors.New(cors.Config{
-			AllowOrigins:     []string{"http://localhost:5173"},
+			AllowOrigins:     origins,
 			AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-			AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "TurnstileToken"},
-			ExposeHeaders:    []string{"Content-Length"},
+			AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "TurnstileToken", "Range"},
+			ExposeHeaders:    []string{"Content-Length", "Content-Range"},
 			AllowCredentials: true,
 			MaxAge:           12 * time.Hour,
 		}),
@@ -86,15 +87,15 @@ func NewRouter() (*API, error) {
 		}),
 	)
 
-	router.HandleMethodNotAllowed = true
-	router.RedirectFixedPath = true
+	a.Router.HandleMethodNotAllowed = true
+	a.Router.RedirectFixedPath = true
 	a.Router.MaxMultipartMemory = 5 << 20
 
 	jwt := middleware.NewJWTMiddleware(db)
 	turnstile := middleware.NewTurnstileMiddleware()
 	maxUploadSize := viper.GetInt64("upload.max_size")
 
-	main := router.Group("/api")
+	main := a.Router.Group("/api")
 	{
 		// HEAD /api/heartbeat 		-> Used to check if the server is alive
 		main.HEAD("/heartbeat", a.Heartbeat)
@@ -106,22 +107,22 @@ func NewRouter() (*API, error) {
 	users := main.Group("/users", middleware.BodySizeLimiter(1<<20))
 	{
 		// GET /api/users		-> Returns the stats of a user
-		users.GET("", jwt, cacheFor(30), a.UserFetch)
+		users.GET("", jwt, a.UserFetch)
 
 		// POST /api/users 		-> Registers a new user
 		users.POST("", a.UserRegister)
 
 		// POST /api/users/login 	-> Logs in a user and returns a JWT token
-		users.POST("/login", cacheFor(30), a.UserLogin)
+		users.POST("/login", a.UserLogin)
 
-		// DELETE /api/users/:id 	-> Deletes a user by their ID
+		// DELETE /api/users/:id 	-> Deletes a user account
 		// users.DELETE("/:id", jwt)
 	}
 
 	files := main.Group("/files")
 	{
-		// GET /api/files/:name 	-> Serves a file directly
-		files.GET("/:fileID", a.FileServe)
+		// GET /api/files/:name 	-> Serves a file via presigned urls
+		files.GET("/:fileID", cacheFor(30), a.FileServe)
 
 		// GET /api/files/bulk 		-> Returns a user's files in bulk
 		files.GET("/bulk", jwt, a.FileFetchBulk)
@@ -131,6 +132,9 @@ func NewRouter() (*API, error) {
 
 		// DELETE /api/files/:id	-> Deletes a file owned by a user
 		files.DELETE("/:id", jwt, a.FileDelete)
+
+		// GET /api/files/search	-> Searches for files saved in the database
+		files.GET("/search", jwt, cacheFor(15), a.FileSearch)
 	}
 
 	ffmpeg := main.Group("/ffmpeg", jwt)
@@ -146,19 +150,35 @@ func NewRouter() (*API, error) {
 	}
 
 	a.Argon = security.New()
-	s3, err := cloudflare.NewR2()
+	s3, err := aws.NewS3()
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize S3 client, %w", err)
 	}
 
-	a.R2 = s3
+	a.S3 = s3
 	a.JobQueue.StartWorkerPool()
 
 	return a, nil
 }
 
 func makeLogger() {
+	atom := zap.NewAtomicLevel()
+
+	switch viper.GetString("app.log_level") {
+	case "debug":
+		atom.SetLevel(zap.DebugLevel)
+	case "warn":
+		atom.SetLevel(zap.WarnLevel)
+	case "error":
+		atom.SetLevel(zap.ErrorLevel)
+	case "fatal":
+		atom.SetLevel(zap.FatalLevel)
+	default:
+		atom.SetLevel(zap.InfoLevel)
+	}
+
 	cfg := zap.NewDevelopmentConfig()
+	cfg.Level = atom
 	cfg.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
 	cfg.EncoderConfig.EncodeTime = func(t time.Time, pae zapcore.PrimitiveArrayEncoder) {
 		pae.AppendString(gray + t.Format("15:04:05.000") + reset)
@@ -173,6 +193,30 @@ func makeLogger() {
 	zap.ReplaceGlobals(log)
 }
 
+func makeOrigins() []string {
+	configOrigins := viper.GetStringSlice("host.cors")
+
+	// lmao
+	s := ""
+	if viper.GetBool("ssl.enable") {
+		s = "s"
+	}
+
+	if len(configOrigins) <= 0 {
+		return []string{fmt.Sprintf("http%v://%v", s, viper.GetString("host.domain"))}
+	}
+
+	origins := make([]string, len(configOrigins))
+	for _, v := range configOrigins {
+		origins = append(origins, fmt.Sprintf("http%v://%v", s, v))
+	}
+
+	origins = append(origins, fmt.Sprintf("http%v://%v", s, viper.GetString("host.domain")))
+
+	return origins
+}
+
+// TODO: use redis instead
 func cacheFor(sec int) gin.HandlerFunc {
 	return cache.CacheByRequestURI(store, time.Second*time.Duration(sec))
 }

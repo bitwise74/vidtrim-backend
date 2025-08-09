@@ -8,12 +8,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type userFetchData struct {
-	Videos []model.File `json:"videos"`
-	Stats  model.Stats  `json:"stats"`
-}
-
-// UserFetch returns the first 20 videos and stats of a user.
+// UserFetch returns the first 10 videos and stats of a user.
 // This is used when initially loading the dashboard
 func (a *API) UserFetch(c *gin.Context) {
 	requestID := c.MustGet("requestID").(string)
@@ -22,8 +17,9 @@ func (a *API) UserFetch(c *gin.Context) {
 	var videos []model.File
 
 	err := a.DB.
-		Where("user_id = ? AND r2_key NOT LIKE ?", userID, "thumb%").
-		Limit(20).
+		Where("user_id = ? AND s3_key NOT LIKE ?", userID, "thumb%").
+		Order("created_at desc").
+		Limit(10).
 		Find(&videos).
 		Error
 	if err != nil {

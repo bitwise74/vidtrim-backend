@@ -8,10 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"slices"
 
 	"github.com/spf13/pflag"
-	"github.com/spf13/viper"
 	v "github.com/spf13/viper"
 	"go.uber.org/zap"
 )
@@ -67,10 +67,10 @@ func Setup() error {
 	v.BindEnv("upload.max_size", "upload_max_size")
 	v.BindEnv("upload.allowed_types", "upload_allowed_types")
 
-	v.BindEnv("cloudflare.account_id", "cloudflare_account_id")
-	v.BindEnv("cloudflare.access_key_id", "cloudflare_access_key_id")
-	v.BindEnv("cloudflare.secret_access_key", "cloudflare_secret_access_key")
-	v.BindEnv("cloudflare.bucket", "cloudflare_bucket")
+	v.BindEnv("aws.access_key_id", "aws_access_key_id")
+	v.BindEnv("aws.secret_access_key", "aws_secret_access_key")
+	v.BindEnv("aws.bucket", "aws_bucket")
+	v.BindEnv("aws.cloudfront_url", "aws_cloudfront_url")
 
 	v.BindEnv("cloudflare.turnstile.enabled", "cloudflare_turnstile_enabled")
 	v.BindEnv("cloudflare.turnstile.secret_token", "cloudflare_turnstile_secret_token")
@@ -122,11 +122,20 @@ func Setup() error {
 		}
 	}
 
-	if viper.GetInt("ffmpeg.max_jobs") <= 0 {
+	// Test if ffmpeg present in path. If not try to use the user provided one
+	err := exec.Command("ffmpeg", "-version").Run()
+	if err != nil {
+		err = exec.Command(v.GetString("ffmpeg.path"), "-version").Run()
+		if err != nil {
+			return errors.New("ffmpeg not found")
+		}
+	}
+
+	if v.GetInt("ffmpeg.max_jobs") <= 0 {
 		return errors.New("max job queue size must be at least 1")
 	}
 
-	if viper.GetInt("ffmpeg.workers") <= 0 {
+	if v.GetInt("ffmpeg.workers") <= 0 {
 		return errors.New("ffmpeg workers must be set to at least 1")
 	}
 
@@ -142,17 +151,20 @@ func Setup() error {
 	switch v.GetString("storage.type") {
 	case "s3":
 		{
-			if v.GetString("cloudflare.account_id") == "" {
-				return errors.New("account id can't be empty")
-			}
-			if v.GetString("cloudflare.access_key_id") == "" {
+			if v.GetString("aws.access_key") == "" {
 				return errors.New("account access id can't be empty")
 			}
-			if v.GetString("cloudflare.secret_access_key") == "" {
+			if v.GetString("aws.secret_access_key") == "" {
 				return errors.New("secret access key can't be empty")
 			}
-			if v.GetString("cloudflare.bucket") == "" {
+			if v.GetString("aws.bucket") == "" {
 				return errors.New("bucket can't be empty")
+			}
+			if v.GetString("aws.region") == "" {
+				return errors.New("region can't be empty")
+			}
+			if v.GetString("aws.cloudfront_url") == "" {
+				return errors.New("cloudfront url can't be empty")
 			}
 		}
 	case "local":

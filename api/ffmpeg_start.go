@@ -23,7 +23,6 @@ func (a *API) FFMpegStart(c *gin.Context) {
 	}
 
 	jobID := util.RandStr(10)
-
 	service.ProgressMap.Store(userID, service.FFMpegJobStats{
 		Progress: 0.0,
 		JobID:    jobID,

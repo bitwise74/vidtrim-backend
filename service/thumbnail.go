@@ -3,34 +3,56 @@
 package service
 
 import (
-	"bytes"
-	"fmt"
+	"bitwise74/video-api/util"
+	"context"
+	"errors"
 	"os"
-	"os/exec"
 	"time"
 
 	"go.uber.org/zap"
 )
 
 // MakeThumbnail creates a thumbnail from a multipart.File
-func MakeThumbnail(temp *os.File, dest string) error {
+// TODO :Cleanup
+func MakeThumbnail(temp *os.File, j *JobQueue, userID string, thumbPath string) error {
 	zap.L().Debug("Creating thumbnail for video")
-	now := time.Now()
 
-	// -ss before the input seeks to the first millisecond before the file opens
-	// (uses key-frame seeking so that it's faster)
-	cmd := exec.Command("ffmpeg", "-loglevel", "error", "-ss", "0", "-i", temp.Name(), "-frames:v", "1", "-q:v", "2", "-vf", "scale=-1:320", dest, "-y")
+	jobID := util.RandStr(10)
+	ProgressMap.Store(userID, FFMpegJobStats{
+		Progress: 0,
+		JobID:    jobID,
+	})
+	defer ProgressMap.Delete(userID)
 
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	done := make(chan error, 1)
 
-	err := cmd.Run()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	err := j.Enqueue(&FFmpegJob{
+		ID:         jobID,
+		UserID:     userID,
+		FilePath:   temp.Name(),
+		Args:       &[]string{"-loglevel", "error", "-ss", "0", "-i", temp.Name(), "-frames:v", "1", "-q:v", "2", "-vf", "scale=-640:360", thumbPath},
+		Done:       done,
+		CancelFunc: cancel,
+		Ctx:        ctx,
+		Opts:       nil,
+	})
 	if err != nil {
-		zap.L().Error("FFmpeg command failed", zap.String("output", stderr.String()))
-		return fmt.Errorf("failed to create thumbnail for video, %w", err)
+		return err
 	}
 
-	zap.L().Debug("Finished creating thumbnail", zap.Duration("took", time.Since(now)))
+	select {
+	case err := <-done:
+		if err != nil {
+			return err
+		}
+	case <-ctx.Done():
+		return errors.New("request timed out")
+	}
+
+	zap.L().Debug("Done creating thumbnail")
 
 	return nil
 }

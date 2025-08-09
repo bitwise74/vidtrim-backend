@@ -6,10 +6,10 @@ type File struct {
 	UserID string `json:"-"`
 
 	// Since we want to allow different users to have files with the same name we
-	// need to keep the R2 objects under a different key
-	R2Key string `json:"r2_key"`
+	// need to keep the S3 objects under a different key
+	S3Key string `json:"s3_key"`
 
-	// Original file name before turning it into a special R2 key
+	// Original file name before turning it into a special S3 key
 	OriginalName string `json:"name"`
 	// At first it seems like storing both the URL and the thumbnail URL
 	// makes sense since these could be easily shared when a user accesses a file

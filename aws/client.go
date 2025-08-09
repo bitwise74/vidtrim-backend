@@ -1,5 +1,5 @@
-// Package cloudflare provides a client for interacting with the Cloudflare API.
-package cloudflare
+// Package aws defines functions used to interact with the AWS API
+package aws
 
 import (
 	"context"
@@ -14,16 +14,16 @@ import (
 	"github.com/spf13/viper"
 )
 
-type R2Client struct {
+type S3Client struct {
 	C      *s3.Client
 	Bucket *string
 }
 
-func NewR2() (*R2Client, error) {
+func NewS3() (*S3Client, error) {
 	cfg, err := config.LoadDefaultConfig(context.TODO(),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
-			viper.GetString("cloudflare.access_key_id"),
-			viper.GetString("cloudflare.secret_access_key"),
+			viper.GetString("aws.access_key"),
+			viper.GetString("aws.secret_access_key"),
 			"",
 		)),
 	)
@@ -31,11 +31,10 @@ func NewR2() (*R2Client, error) {
 		return nil, err
 	}
 
-	bucket := aws.String(viper.GetString("cloudflare.bucket"))
+	bucket := aws.String(viper.GetString("aws.bucket"))
 
 	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
-		o.BaseEndpoint = aws.String(fmt.Sprintf("https://%s.r2.cloudflarestorage.com", viper.GetString("cloudflare.account_id")))
-		o.Region = "auto"
+		o.Region = viper.GetString("aws.region")
 	})
 
 	_, err = client.HeadBucket(context.TODO(), &s3.HeadBucketInput{
@@ -53,7 +52,7 @@ func NewR2() (*R2Client, error) {
 		return nil, fmt.Errorf("failed to check if bucket exists, %w", err)
 	}
 
-	return &R2Client{
+	return &S3Client{
 		C:      client,
 		Bucket: bucket,
 	}, nil

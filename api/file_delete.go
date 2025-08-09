@@ -14,7 +14,7 @@ import (
 )
 
 type deleteInfo struct {
-	R2Key string
+	S3Key string
 	Size  int
 }
 
@@ -36,8 +36,8 @@ func (a *API) FileDelete(c *gin.Context) {
 	err := a.DB.
 		Model(model.File{}).
 		Where("user_id = ? AND id = ?", userID, fileID).
-		Select("r2_key, size + COALESCE(thumbnail_size, 0) AS size").
-		Find(&info).
+		Select("s3_key, size + COALESCE(thumbnail_size, 0) AS size").
+		First(&info).
 		Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -58,7 +58,7 @@ func (a *API) FileDelete(c *gin.Context) {
 	}
 
 	err = a.DB.
-		Where("r2_key IN ?", []string{info.R2Key, "thumb_" + info.R2Key}).
+		Where("s3_key IN ?", []string{info.S3Key, "thumb_" + info.S3Key}).
 		Delete(model.File{}).
 		Error
 	if err != nil {
@@ -71,15 +71,15 @@ func (a *API) FileDelete(c *gin.Context) {
 		return
 	}
 
-	resp, err := a.R2.C.DeleteObjects(context.TODO(), &s3.DeleteObjectsInput{
-		Bucket: a.R2.Bucket,
+	resp, err := a.S3.C.DeleteObjects(context.TODO(), &s3.DeleteObjectsInput{
+		Bucket: a.S3.Bucket,
 		Delete: &types.Delete{
 			Objects: []types.ObjectIdentifier{
 				{
-					Key: &info.R2Key,
+					Key: &info.S3Key,
 				},
 				{
-					Key: aws.String("thumbnail_" + info.R2Key),
+					Key: aws.String("thumbnail_" + info.S3Key),
 				},
 			},
 		},
@@ -116,5 +116,21 @@ func (a *API) FileDelete(c *gin.Context) {
 		return
 	}
 
-	c.Status(http.StatusOK)
+	var newStats model.Stats
+
+	err = a.DB.
+		Where("user_id = ?", userID).
+		First(&newStats).
+		Error
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+			"error":     "Internal server error",
+			"requestID": requestID,
+		})
+
+		zap.L().Error("Failed to decrement user's used storage", zap.Error(err))
+		return
+	}
+
+	c.JSON(http.StatusOK, newStats)
 }

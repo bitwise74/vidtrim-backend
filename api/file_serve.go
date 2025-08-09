@@ -2,15 +2,12 @@ package api
 
 import (
 	"bitwise74/video-api/model"
-	"context"
 	"errors"
-	"io"
 	"net/http"
 	"strconv"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/gin-gonic/gin"
+	"github.com/spf13/viper"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -33,13 +30,13 @@ func (a *API) FileServe(c *gin.Context) {
 		thumb = true
 	}
 
-	var r2ID string
+	var s3Key string
 
 	err = a.DB.
 		Model(model.File{}).
 		Where("id = ?", fileID).
-		Select("r2_key").
-		Find(&r2ID).
+		Select("s3_key").
+		First(&s3Key).
 		Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -59,40 +56,9 @@ func (a *API) FileServe(c *gin.Context) {
 		return
 	}
 
-	cType := "video/mp4"
-
 	if thumb {
-		r2ID = "thumb_" + r2ID
-		cType = "image/webp"
-		c.Header("Cache-Control", "public, max-age=31536000, immutable")
+		s3Key = "thumb_" + s3Key
 	}
 
-	input := &s3.GetObjectInput{
-		Bucket: a.R2.Bucket,
-		Key:    aws.String(r2ID),
-	}
-
-	result, err := a.R2.C.GetObject(context.Background(), input)
-	if err != nil {
-		zap.L().Error("Failed to get file", zap.Error(err))
-		c.JSON(http.StatusNotFound, gin.H{
-			"error":     "File not found",
-			"requestID": requestID,
-		})
-		return
-	}
-	defer result.Body.Close()
-
-	c.Header("Content-Type", cType)
-
-	_, err = io.Copy(c.Writer, result.Body)
-	if err != nil {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
-			"error":     "Internal server error",
-			"requestID": requestID,
-		})
-
-		zap.L().Error("Failed to copy file buffer to context writer", zap.String("id", fileID), zap.Error(err))
-		return
-	}
+	c.Redirect(http.StatusFound, viper.GetString("aws.cloudfront_url")+"/"+s3Key)
 }

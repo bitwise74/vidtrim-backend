@@ -3,7 +3,6 @@ package validators
 import (
 	"bitwise74/video-api/model"
 	"errors"
-	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -55,8 +54,6 @@ func FileValidator(fh *multipart.FileHeader, db *gorm.DB, userID string) (int, m
 		if err != nil {
 			return http.StatusInternalServerError, nil, err
 		}
-
-		fmt.Println(usedSpace, fh.Size, viper.GetInt64("storage.max_usage"))
 
 		if usedSpace+fh.Size > viper.GetInt64("storage.max_usage") {
 			return http.StatusConflict, nil, ErrNoSpace

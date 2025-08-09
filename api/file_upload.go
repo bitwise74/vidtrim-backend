@@ -57,6 +57,7 @@ func (a *API) FileUpload(c *gin.Context) {
 		})
 		return
 	}
+	// TODO: fix +faststart flag missing
 
 	fh := files[0]
 
@@ -100,7 +101,7 @@ func (a *API) FileUpload(c *gin.Context) {
 	}
 
 	f.Seek(0, io.SeekStart)
-	r2Key := util.RandStr(7)
+	s3Key := util.RandStr(7)
 
 	errChan := make(chan error, 3)
 	uploadedIDs := make([]string, 2)
@@ -116,10 +117,10 @@ func (a *API) FileUpload(c *gin.Context) {
 	// Make and upload the thumbnail in the background
 	go func() {
 		defer wg.Done()
-		thumbName := "thumb_" + r2Key
+		thumbName := "thumb_" + s3Key
 		thumbPath := path.Join(os.TempDir(), thumbName) + ".webp"
 
-		err := service.MakeThumbnail(temp, thumbPath)
+		err = service.MakeThumbnail(temp, a.JobQueue, userID, thumbPath)
 		if err != nil {
 			errChan <- fmt.Errorf("failed to create thumbnail, %w", err)
 			return
@@ -138,15 +139,15 @@ func (a *API) FileUpload(c *gin.Context) {
 			return
 		}
 
-		_, err = a.R2.C.PutObject(ctx, &s3.PutObjectInput{
-			Bucket:        a.R2.Bucket,
+		_, err = a.S3.C.PutObject(ctx, &s3.PutObjectInput{
+			Bucket:        a.S3.Bucket,
 			Key:           &thumbName,
 			Body:          file,
 			ContentType:   aws.String("image/webp"),
 			ContentLength: aws.Int64(stat.Size()),
 		})
 		if err != nil {
-			errChan <- fmt.Errorf("failed to upload thumbnail to R2, %w", err)
+			errChan <- fmt.Errorf("failed to upload thumbnail to S3, %w", err)
 			return
 		}
 
@@ -156,7 +157,7 @@ func (a *API) FileUpload(c *gin.Context) {
 
 		err = a.DB.
 			Create(&model.File{
-				R2Key:        thumbName,
+				S3Key:        thumbName,
 				UserID:       userID,
 				OriginalName: thumbName + ".webp",
 				Format:       "image/webp",
@@ -171,7 +172,7 @@ func (a *API) FileUpload(c *gin.Context) {
 		errChan <- nil
 	}()
 
-	// Upload file to R2
+	// Upload file to S3
 	go func() {
 		defer wg.Done()
 		now := time.Now()
@@ -181,36 +182,36 @@ func (a *API) FileUpload(c *gin.Context) {
 		zap.L().Debug("Starting video upload")
 
 		if fh.Size > multipartLimit {
-			u := manager.NewUploader(a.R2.C, func(u *manager.Uploader) {
+			u := manager.NewUploader(a.S3.C, func(u *manager.Uploader) {
 				u.Concurrency = 5
 				u.PartSize = 5 << 20
 			})
 
 			_, err = u.Upload(ctx, &s3.PutObjectInput{
-				Bucket:        a.R2.Bucket,
-				Key:           &r2Key,
+				Bucket:        a.S3.Bucket,
+				Key:           &s3Key,
 				Body:          f,
 				ContentLength: &fh.Size,
 				ContentType:   aws.String(fh.Header.Get("Content-Type")),
 			})
 			if err != nil {
-				errChan <- fmt.Errorf("failed to upload file to R2, %w", err)
+				errChan <- fmt.Errorf("failed to upload file to S3, %w", err)
 				return
 			}
 		} else {
-			_, err = a.R2.C.PutObject(ctx, &s3.PutObjectInput{
-				Bucket: a.R2.Bucket,
-				Key:    &r2Key,
+			_, err = a.S3.C.PutObject(ctx, &s3.PutObjectInput{
+				Bucket: a.S3.Bucket,
+				Key:    &s3Key,
 				Body:   f,
 			})
 			if err != nil {
-				errChan <- fmt.Errorf("failed to upload file to R2, %w", err)
+				errChan <- fmt.Errorf("failed to upload file to S3, %w", err)
 				return
 			}
 		}
 
 		errChan <- nil
-		uploadedIDs = append(uploadedIDs, r2Key)
+		uploadedIDs = append(uploadedIDs, s3Key)
 
 		zap.L().Debug("File uploaded", zap.Duration("took", time.Since(now)))
 	}()
@@ -233,7 +234,7 @@ func (a *API) FileUpload(c *gin.Context) {
 
 		fileRecord := model.File{
 			UserID:       userID,
-			R2Key:        r2Key,
+			S3Key:        s3Key,
 			OriginalName: fh.Filename,
 			Size:         fh.Size,
 			Format:       fh.Header.Get("Content-Type"),
@@ -268,8 +269,8 @@ func (a *API) FileUpload(c *gin.Context) {
 
 			if len(uploadedIDs) != 0 {
 				for _, id := range uploadedIDs {
-					_, err := a.R2.C.DeleteObject(context.Background(), &s3.DeleteObjectInput{
-						Bucket: a.R2.Bucket,
+					_, err := a.S3.C.DeleteObject(context.Background(), &s3.DeleteObjectInput{
+						Bucket: a.S3.Bucket,
 						Key:    aws.String(id),
 					})
 					if err != nil {
@@ -307,6 +308,6 @@ func (a *API) FileUpload(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"key": r2Key,
+		"key": s3Key,
 	})
 }

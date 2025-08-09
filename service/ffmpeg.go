@@ -25,6 +25,7 @@ type FFmpegJob struct {
 	FilePath   string
 	Output     io.Writer
 	Opts       *validators.ProcessingOptions
+	Args       *[]string
 	Ctx        context.Context
 	CancelFunc context.CancelFunc
 	Done       chan error
@@ -52,11 +53,7 @@ func NewJobQueue() *JobQueue {
 // Figures out the amount of threads to use per ffmpeg job
 func getThreadsPerJob(c int) int {
 	totalCores := runtime.NumCPU()
-	threads := int(math.Floor(float64(totalCores) / float64(c)))
-
-	if threads < 1 {
-		threads = 1
-	}
+	threads := max(int(math.Floor(float64(totalCores)/float64(c))), 1)
 
 	zap.L().Debug("Figured out amount of threads to use", zap.Int("t", threads))
 	return threads
@@ -83,25 +80,25 @@ func (q *JobQueue) Enqueue(job *FFmpegJob) error {
 	}
 }
 
-func (q *JobQueue) runFFmpegJob(job *FFmpegJob) error {
+func (q *JobQueue) MakeFFmpegFlags(opts *validators.ProcessingOptions, path string) ([]string, float64, error) {
 	args := []string{
-		"-i", job.FilePath,
+		"-i", path,
 	}
 
 	var duration float64
 
-	if job.Opts.TrimEnd > 1 && job.Opts.TrimStart != -1 {
+	if opts.TrimEnd > 1 && opts.TrimStart != -1 {
 		args = append(args,
-			"-ss", util.FloatToTimestamp(job.Opts.TrimStart),
-			"-to", util.FloatToTimestamp(job.Opts.TrimEnd),
+			"-ss", util.FloatToTimestamp(opts.TrimStart),
+			"-to", util.FloatToTimestamp(opts.TrimEnd),
 		)
 
-		duration = float64(job.Opts.TrimEnd - job.Opts.TrimStart)
+		duration = float64(opts.TrimEnd - opts.TrimStart)
 	} else {
 		var err error
-		duration, err = GetDuration(job.FilePath)
+		duration, err = GetDuration(path)
 		if err != nil {
-			return fmt.Errorf("failed to run ffprobe to determine video duration: %w", err)
+			return []string{}, 0, fmt.Errorf("failed to run ffprobe to determine video duration: %w", err)
 		}
 	}
 
@@ -110,8 +107,8 @@ func (q *JobQueue) runFFmpegJob(job *FFmpegJob) error {
 		"-threads", strconv.Itoa(q.threads),
 	)
 
-	if job.Opts.TargetSize > 0 {
-		totalKilobits := job.Opts.TargetSize * 8388.608
+	if opts.TargetSize > 0 {
+		totalKilobits := opts.TargetSize * 8388.608
 		totalBitrateKbps := totalKilobits / float64(duration)
 
 		videoBitrateKbps := totalBitrateKbps - 128
@@ -132,14 +129,15 @@ func (q *JobQueue) runFFmpegJob(job *FFmpegJob) error {
 		)
 	}
 
-	if job.Opts.ProcessingSpeed != "" {
+	if opts.ProcessingSpeed != "" {
 		args = append(args,
-			"-preset", job.Opts.ProcessingSpeed,
+			"-preset", opts.ProcessingSpeed,
 		)
 	}
 
 	args = append(args,
 		"-movflags", "frag_keyframe+empty_moov",
+		"-movflags", "+faststart",
 		"-c:a", "aac",
 		"-b:a", "128k",
 		"-loglevel", "error",
@@ -150,8 +148,29 @@ func (q *JobQueue) runFFmpegJob(job *FFmpegJob) error {
 		"pipe:1", "-progress",
 		"pipe:2", "-nostats",
 	)
+	return args, duration, nil
+}
 
-	cmd := exec.Command("ffmpeg", args...)
+func (q *JobQueue) runFFmpegJob(job *FFmpegJob) error {
+	var duration float64
+	var err error
+
+	if job.Args == nil {
+		if job.Opts == nil {
+			return errors.New("no arguments provided")
+		}
+
+		var args []string
+
+		args, duration, err = q.MakeFFmpegFlags(job.Opts, job.FilePath)
+		if err != nil {
+			return err
+		}
+
+		job.Args = &args
+	}
+
+	cmd := exec.Command("ffmpeg", *job.Args...)
 
 	zap.L().Debug("Running FFmpeg command", zap.String("cmd", cmd.String()))
 
