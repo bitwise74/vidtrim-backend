@@ -1,0 +1,63 @@
+services:
+  backend:
+    restart: always
+    # If you want to use hwaccel flags you have to give the container access to your GPU
+    # deploy:
+    #   resources:
+    #     reservations:
+    # === Nvidia ===
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    # === Intel & AMD ===
+    #       devices:
+    #         - /dev/dri:/dev/dri
+    environment:
+    - APP_LOG_LEVEL=info
+    - HOST_DOMAIN=localhost
+    # You can set multiple allowed origins. Example: localhost,domain.net,cdn.domain.net
+    # The default origin is just the svelte frontend running in dev mode
+    - HOST_CORS=http://localhost:5173
+    - HOST_SSL_ENABLED=false
+    # This is where the SQlite database file will be kept OUTSIDE of your container.
+    # Make sure the place is accessible and safe from other programs
+    # The default value (.) points to the folder where the docker-compose file is
+    - HOST_DATABASE_PATH=./database.db
+    - FFMPEG_HWACCEL_FLAGS=
+    - FFMPEG_MAX_JOBS=32
+    - FFMPEG_WORKERS=4
+    # This should be a long, random string. If you don't provide one it'll be generated
+    # for you during the initial run. You must keep this a secret as it can be used to 
+    # create JWT tokens to login as someone else
+    - JWT_SECRET=
+    - STORAGE_TYPE=s3
+    # Both are in bytes
+    - STORAGE_MAX_USAGE=10_000_000_000
+    - UPLOAD_MAX_SIZE=2_000_000_000
+    # Types other than the default one aren't supported yet but may work
+    - UPLOAD_ALLOWED_TYPES=video/mp4
+    - AWS_ACCESS_KEY_ID=
+    - AWS_SECRET_ACCESS_KEY=
+    - AWS_BUCKET=
+    - AWS_REGION=
+    - AWS_CLOUDFRONT_URL=
+    # Recommended to setup as its free and defends your FFmpeg endpoint from bots
+    - CLOUDFLARE_TURNSTILE_ENABLED=false
+    - CLOUDFLARE_TURNSTILE_SECRET_TOKEN=
+
+    # DON'T CHANGE THESE VALUES UNLESS YOU KNOW WHAT YOU'RE DOING!
+    - HOST_SSL_CERTIFICATE_PATH=./certs/fullchain.pem
+    - HOST_SSL_CERTIFICATE_KEY_PATH=./certs/privkey.pem
+    - HOST_PORT=8080
+    - TMPDIR=/tmp
+    ports:
+    - "${HOST_PORT-8080}:${HOST_PORT-8080}"
+    build: .
+    volumes:
+      # Point to your SSL certificates
+      - "${HOST_SSL_CERTIFICATE_PATH:-/dev/null}:/certs/:ro"
+      # Point to your SQlite database file (create one with <touch database.db>)
+      - "${HOST_DATABASE_PATH:-./database.db}:/app/database.db"
+      - /tmp:/tmp
+    

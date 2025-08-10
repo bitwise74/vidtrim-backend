@@ -7,9 +7,11 @@ log_level = "debug"
 # Host settings
 # port                  -> Port to run the server on
 # domain                -> Domain used to host the server on
+# cors                  -> Allowed cors origins
 [host]
 port = 8080
-domain = "localhost:5173"
+domain = "localhost"
+cors = ["http://localhost:5173"]
 
 
 # SSL settings

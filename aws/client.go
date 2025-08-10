@@ -22,7 +22,7 @@ type S3Client struct {
 func NewS3() (*S3Client, error) {
 	cfg, err := config.LoadDefaultConfig(context.TODO(),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
-			viper.GetString("aws.access_key"),
+			viper.GetString("aws.access_key_id"),
 			viper.GetString("aws.secret_access_key"),
 			"",
 		)),

@@ -37,7 +37,7 @@ func (a *API) FileFetchBulk(c *gin.Context) {
 		return
 	}
 
-	limitStr := c.DefaultQuery("limit", "20")
+	limitStr := c.DefaultQuery("limit", "10")
 	limit, err := strconv.Atoi(limitStr)
 	if err != nil {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{

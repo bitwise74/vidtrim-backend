@@ -17,7 +17,6 @@ import (
 )
 
 var (
-	cleanupS3         = pflag.Bool("cleanup-s3", false, "Cleans up S3 bucket")
 	validLogLevels    = []string{"debug", "info", "warn", "error", "fatal"}
 	validStorageTypes = []string{"s3", "local"}
 )
@@ -45,35 +44,37 @@ func Setup() error {
 	//
 	// ENVS
 	//
-	v.BindEnv("app.log_level", "app_log_level")
+	v.BindEnv("app.log_level", "APP_LOG_LEVEL")
 
-	v.BindEnv("host.port", "host_port")
-	v.BindEnv("host.domain", "host_domain")
+	v.BindEnv("host.port", "HOST_PORT")
+	v.BindEnv("host.domain", "HOST_DOMAIN")
+	v.BindEnv("host.cors", "HOST_CORS")
 
-	v.BindEnv("host.ssl.enabled", "host_ssl_enabled")
-	v.BindEnv("host.ssl.certificate_path", "host_ssl_certificate_path")
-	v.BindEnv("host.ssl.certificate_key_path", "host_ssl_certificate_key_path")
+	v.BindEnv("host.ssl.enabled", "HOST_SSL_ENABLED")
+	v.BindEnv("host.ssl.certificate_path", "HOST_SSL_CERTIFICATE_PATH")
+	v.BindEnv("host.ssl.certificate_key_path", "HOST_SSL_CERTIFICATE_KEY_PATH")
 
-	v.BindEnv("ffmpeg.path", "ffmpeg_path")
-	v.BindEnv("ffmpeg.hwaccel_flags", "ffmpeg_hwaccel_flags")
-	v.BindEnv("ffmpeg.max_jobs", "ffmpeg_max_jobs")
-	v.BindEnv("ffmpeg.workers", "ffmpeg_workers")
+	v.BindEnv("ffmpeg.path", "FFMPEG_PATH")
+	v.BindEnv("ffmpeg.hwaccel_flags", "FFMPEG_HWACCEL_FLAGS")
+	v.BindEnv("ffmpeg.max_jobs", "FFMPEG_MAX_JOBS")
+	v.BindEnv("ffmpeg.workers", "FFMPEG_WORKERS")
 
-	v.BindEnv("jwt.secret", "jwt_secret")
+	v.BindEnv("jwt.secret", "JWT_SECRET")
 
-	v.BindEnv("storage.type", "storage_type")
-	v.BindEnv("storage.max_usage", "storage_max_usage")
+	v.BindEnv("storage.type", "STORAGE_TYPE")
+	v.BindEnv("storage.max_usage", "STORAGE_MAX_USAGE")
 
-	v.BindEnv("upload.max_size", "upload_max_size")
-	v.BindEnv("upload.allowed_types", "upload_allowed_types")
+	v.BindEnv("upload.max_size", "UPLOAD_MAX_SIZE")
+	v.BindEnv("upload.allowed_types", "UPLOAD_ALLOWED_TYPES")
 
-	v.BindEnv("aws.access_key_id", "aws_access_key_id")
-	v.BindEnv("aws.secret_access_key", "aws_secret_access_key")
-	v.BindEnv("aws.bucket", "aws_bucket")
-	v.BindEnv("aws.cloudfront_url", "aws_cloudfront_url")
+	v.BindEnv("aws.access_key_id", "AWS_ACCESS_KEY_ID")
+	v.BindEnv("aws.secret_access_key", "AWS_SECRET_ACCESS_KEY")
+	v.BindEnv("aws.bucket", "AWS_BUCKET")
+	v.BindEnv("aws.region", "AWS_REGION")
+	v.BindEnv("aws.cloudfront_url", "AWS_CLOUDFRONT_URL")
 
-	v.BindEnv("cloudflare.turnstile.enabled", "cloudflare_turnstile_enabled")
-	v.BindEnv("cloudflare.turnstile.secret_token", "cloudflare_turnstile_secret_token")
+	v.BindEnv("cloudflare.turnstile.enabled", "CLOUDFLARE_TURNSTILE_ENABLED")
+	v.BindEnv("cloudflare.turnstile.secret_token", "CLOUDFLARE_TURNSTILE_SECRET_TOKEN")
 
 	//
 	// Defaults
@@ -92,13 +93,8 @@ func Setup() error {
 
 	v.SetDefault("cloudflare.turnstile.enabled", false)
 
-	if err := v.ReadInConfig(); err != nil {
-		if _, ok := err.(v.ConfigFileNotFoundError); ok {
-			return errors.New("config.toml file is missing")
-		}
-
-		return fmt.Errorf("failed to read config file, %w", err)
-	}
+	// Wont do anything for docker
+	v.ReadInConfig()
 
 	if !slices.Contains(validLogLevels, v.GetString("app.log_level")) {
 		return errors.New("invalid log level provided")
@@ -151,7 +147,7 @@ func Setup() error {
 	switch v.GetString("storage.type") {
 	case "s3":
 		{
-			if v.GetString("aws.access_key") == "" {
+			if v.GetString("aws.access_key_id") == "" {
 				return errors.New("account access id can't be empty")
 			}
 			if v.GetString("aws.secret_access_key") == "" {

@@ -50,13 +50,10 @@ func NewRouter() (*API, error) {
 	a.DB = db
 
 	makeLogger()
-	origins := makeOrigins()
-
-	zap.L().Debug("Configured cors origins", zap.Strings("origins", origins))
 
 	a.Router.Use(
 		cors.New(cors.Config{
-			AllowOrigins:     origins,
+			AllowOrigins:     viper.GetStringSlice("host.cors"),
 			AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 			AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "TurnstileToken", "Range"},
 			ExposeHeaders:    []string{"Content-Length", "Content-Range"},
@@ -106,7 +103,7 @@ func NewRouter() (*API, error) {
 
 	users := main.Group("/users", middleware.BodySizeLimiter(1<<20))
 	{
-		// GET /api/users		-> Returns the stats of a user
+		// GET /api/users		-> Returns the basic info of a user
 		users.GET("", jwt, a.UserFetch)
 
 		// POST /api/users 		-> Registers a new user

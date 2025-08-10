@@ -19,6 +19,8 @@ func NewJWTMiddleware(d *gorm.DB) gin.HandlerFunc {
 
 		tokenStr, err := c.Cookie("auth_token")
 		if err != nil {
+			zap.L().Error("Failed to get token cookie", zap.Error(err))
+
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error": "Unauthorized",
 			})
@@ -96,7 +98,7 @@ func NewJWTMiddleware(d *gorm.DB) gin.HandlerFunc {
 		// In case someone logs in to delete their account and then logs in again (that's so fucking stupid I know),
 		// we'll reject the request
 		var found bool
-		err = d.Model(model.User{}).Where("id = ?", userID).Select("count(*) > 0").First(&found).Error
+		err = d.Model(model.User{}).Where("id = ?", userID).Select("count(*) > 0").Find(&found).Error
 		if err != nil && err != gorm.ErrRecordNotFound {
 			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
 				"error":     "Internal server error",
