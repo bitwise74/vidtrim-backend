@@ -9,7 +9,8 @@ RUN go mod download
 
 COPY . ./
 
-RUN go build .
+RUN go build -ldflags="-s -w" .
+RUN chmod +x ./video-api
 
 EXPOSE 8080
 

@@ -101,7 +101,7 @@ func (a *API) FileUpload(c *gin.Context) {
 	}
 
 	f.Seek(0, io.SeekStart)
-	s3Key := util.RandStr(7)
+	s3Key := util.RandStr(10)
 
 	errChan := make(chan error, 3)
 	uploadedIDs := make([]string, 2)
@@ -189,10 +189,10 @@ func (a *API) FileUpload(c *gin.Context) {
 
 			_, err = u.Upload(ctx, &s3.PutObjectInput{
 				Bucket:        a.S3.Bucket,
-				Key:           &s3Key,
+				Key:           aws.String(s3Key + ".mp4"),
 				Body:          f,
 				ContentLength: &fh.Size,
-				ContentType:   aws.String(fh.Header.Get("Content-Type")),
+				ContentType:   aws.String("video/mp4"),
 			})
 			if err != nil {
 				errChan <- fmt.Errorf("failed to upload file to S3, %w", err)
