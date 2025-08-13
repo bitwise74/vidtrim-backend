@@ -257,7 +257,7 @@ func (a *API) FileUpload(c *gin.Context) {
 	wg.Wait()
 
 	err = a.DB.
-		Create(model.File{
+		Create(&model.File{
 			UserID:       userID,
 			FileKey:      fileKey + ext,
 			ThumbKey:     fmt.Sprintf("thumb_%v.webp", fileKey),
