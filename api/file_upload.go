@@ -14,6 +14,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -102,7 +103,6 @@ func (a *API) FileUpload(c *gin.Context) {
 	}
 
 	f.Seek(0, io.SeekStart)
-	s3Key := util.RandStr(10)
 
 	errChan := make(chan error, 3)
 	uploadedIDs := make([]string, 2)
@@ -111,23 +111,27 @@ func (a *API) FileUpload(c *gin.Context) {
 	defer cancel()
 
 	var wg sync.WaitGroup
-	wg.Add(3)
 
-	var thumbSize int64 = 0
+	ext := path.Ext(fh.Filename)
+	fileKey := util.RandStr(10) + ext
+	var thumbKey string
+	var size atomic.Int64
+
+	wg.Add(3)
 
 	// Make and upload the thumbnail in the background
 	go func() {
 		defer wg.Done()
-		thumbName := "thumb_" + s3Key
-		thumbPath := path.Join(os.TempDir(), thumbName) + ".webp"
+		t := "thumb_" + fileKey
+		thumbKey = strings.TrimSuffix(path.Join(os.TempDir(), t), ext) + ".webp"
 
-		err = service.MakeThumbnail(temp, a.JobQueue, userID, thumbPath)
+		err = service.MakeThumbnail(temp, a.JobQueue, userID, thumbKey)
 		if err != nil {
 			errChan <- fmt.Errorf("failed to create thumbnail, %w", err)
 			return
 		}
 
-		file, err := os.Open(thumbPath)
+		file, err := os.Open(thumbKey)
 		if err != nil {
 			errChan <- fmt.Errorf("failed to open dest file, %w", err)
 			return
@@ -142,7 +146,7 @@ func (a *API) FileUpload(c *gin.Context) {
 
 		_, err = a.S3.C.PutObject(ctx, &s3.PutObjectInput{
 			Bucket:        a.S3.Bucket,
-			Key:           &thumbName,
+			Key:           &t,
 			Body:          file,
 			ContentType:   aws.String("image/webp"),
 			ContentLength: aws.Int64(stat.Size()),
@@ -152,23 +156,8 @@ func (a *API) FileUpload(c *gin.Context) {
 			return
 		}
 
-		errChan <- nil
-		uploadedIDs = append(uploadedIDs, thumbName)
-		thumbSize = stat.Size()
-
-		err = a.DB.
-			Create(&model.File{
-				S3Key:        thumbName,
-				UserID:       userID,
-				OriginalName: thumbName + ".webp",
-				Format:       "image/webp",
-				CreatedAt:    time.Now().Unix(),
-			}).
-			Error
-		if err != nil {
-			errChan <- fmt.Errorf("failed to create database record, %w", err)
-			return
-		}
+		uploadedIDs = append(uploadedIDs, t)
+		size.Add(stat.Size())
 
 		errChan <- nil
 	}()
@@ -181,6 +170,7 @@ func (a *API) FileUpload(c *gin.Context) {
 		var err error
 
 		zap.L().Debug("Starting video upload")
+		size.Add(fh.Size)
 
 		if fh.Size > multipartLimit {
 			u := manager.NewUploader(a.S3.C, func(u *manager.Uploader) {
@@ -190,7 +180,7 @@ func (a *API) FileUpload(c *gin.Context) {
 
 			_, err = u.Upload(ctx, &s3.PutObjectInput{
 				Bucket:        a.S3.Bucket,
-				Key:           aws.String(s3Key + ".mp4"),
+				Key:           &fileKey,
 				Body:          f,
 				ContentLength: &fh.Size,
 				ContentType:   aws.String("video/mp4"),
@@ -201,9 +191,11 @@ func (a *API) FileUpload(c *gin.Context) {
 			}
 		} else {
 			_, err = a.S3.C.PutObject(ctx, &s3.PutObjectInput{
-				Bucket: a.S3.Bucket,
-				Key:    &s3Key,
-				Body:   f,
+				Bucket:        a.S3.Bucket,
+				Key:           &fileKey,
+				Body:          f,
+				ContentLength: &fh.Size,
+				ContentType:   aws.String("video/mp4"),
 			})
 			if err != nil {
 				errChan <- fmt.Errorf("failed to upload file to S3, %w", err)
@@ -212,7 +204,7 @@ func (a *API) FileUpload(c *gin.Context) {
 		}
 
 		errChan <- nil
-		uploadedIDs = append(uploadedIDs, s3Key)
+		uploadedIDs = append(uploadedIDs, fileKey)
 
 		zap.L().Debug("File uploaded", zap.Duration("took", time.Since(now)))
 	}()
@@ -235,9 +227,10 @@ func (a *API) FileUpload(c *gin.Context) {
 
 		fileRecord := model.File{
 			UserID:       userID,
-			S3Key:        s3Key,
+			FileKey:      fileKey,
+			ThumbKey:     thumbKey,
 			OriginalName: fh.Filename,
-			Size:         fh.Size,
+			Size:         size.Load(),
 			Format:       fh.Header.Get("Content-Type"),
 			CreatedAt:    time.Now().Unix(),
 			Duration:     duration,
@@ -289,12 +282,15 @@ func (a *API) FileUpload(c *gin.Context) {
 	// Don't let cancel run prematurely
 	wg.Wait()
 
+	err = a.DB.
+		Error
+
 	// And after everything is done increment the amount of used storage
 	err = a.DB.
 		Model(model.Stats{}).
 		Where("user_id = ?", userID).
 		Updates(map[string]any{
-			"used_storage":   gorm.Expr("used_storage + ?", fh.Size+thumbSize),
+			"used_storage":   gorm.Expr("used_storage + ?", size.Load()),
 			"uploaded_files": gorm.Expr("uploaded_files + ?", 1),
 		}).
 		Error
@@ -309,6 +305,7 @@ func (a *API) FileUpload(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"key": s3Key,
+		"file":  fileKey,
+		"thumb": thumbKey,
 	})
 }

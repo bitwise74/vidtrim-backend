@@ -17,7 +17,7 @@ func (a *API) UserFetch(c *gin.Context) {
 	var videos []model.File
 
 	err := a.DB.
-		Where("user_id = ? AND s3_key NOT LIKE ?", userID, "thumb%").
+		Where("user_id = ?", userID).
 		Order("created_at desc").
 		Limit(10).
 		Find(&videos).

@@ -5,7 +5,6 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/gin-gonic/gin"
@@ -14,8 +13,9 @@ import (
 )
 
 type deleteInfo struct {
-	S3Key string
-	Size  int
+	FileKey  string
+	ThumbKey string
+	Size     int
 }
 
 func (a *API) FileDelete(c *gin.Context) {
@@ -36,7 +36,7 @@ func (a *API) FileDelete(c *gin.Context) {
 	err := a.DB.
 		Model(model.File{}).
 		Where("user_id = ? AND id = ?", userID, fileID).
-		Select("s3_key, size + COALESCE(thumbnail_size, 0) AS size").
+		Select("file_key, thumb_key, size").
 		First(&info).
 		Error
 	if err != nil {
@@ -58,7 +58,7 @@ func (a *API) FileDelete(c *gin.Context) {
 	}
 
 	err = a.DB.
-		Where("s3_key IN ?", []string{info.S3Key, "thumb_" + info.S3Key}).
+		Where("file_key = ?", info.FileKey).
 		Delete(model.File{}).
 		Error
 	if err != nil {
@@ -75,12 +75,8 @@ func (a *API) FileDelete(c *gin.Context) {
 		Bucket: a.S3.Bucket,
 		Delete: &types.Delete{
 			Objects: []types.ObjectIdentifier{
-				{
-					Key: &info.S3Key,
-				},
-				{
-					Key: aws.String("thumbnail_" + info.S3Key),
-				},
+				{Key: &info.FileKey},
+				{Key: &info.ThumbKey},
 			},
 		},
 	})

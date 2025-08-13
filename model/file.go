@@ -7,7 +7,8 @@ type File struct {
 
 	// Since we want to allow different users to have files with the same name we
 	// need to keep the S3 objects under a different key
-	S3Key string `json:"s3_key"`
+	FileKey  string `json:"file_key"`
+	ThumbKey string `json:"thumb_key"`
 
 	// Original file name before turning it into a special S3 key
 	OriginalName string `json:"name"`

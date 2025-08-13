@@ -119,7 +119,7 @@ func NewRouter() (*API, error) {
 	files := main.Group("/files")
 	{
 		// GET /api/files/:name 	-> Serves a file via presigned urls
-		files.GET("/:fileID", cacheFor(30), a.FileServe)
+		// files.GET("/:fileID", cacheFor(30), a.FileServe)
 
 		// GET /api/files/bulk 		-> Returns a user's files in bulk
 		files.GET("/bulk", jwt, a.FileFetchBulk)
