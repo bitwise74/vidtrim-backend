@@ -113,7 +113,7 @@ func (a *API) FileUpload(c *gin.Context) {
 	var wg sync.WaitGroup
 
 	ext := path.Ext(fh.Filename)
-	fileKey := util.RandStr(10) + ext
+	fileKey := util.RandStr(10)
 	var size atomic.Int64
 
 	wg.Add(3)
@@ -121,8 +121,8 @@ func (a *API) FileUpload(c *gin.Context) {
 	// Make and upload the thumbnail in the background
 	go func() {
 		defer wg.Done()
-		t := "thumb_" + fileKey
-		thumbPath := strings.TrimSuffix(path.Join(os.TempDir(), t), ext) + ".webp"
+		t := "thumb_" + fileKey + ".webp"
+		thumbPath := path.Join(os.TempDir(), t) + ".webp"
 
 		err = service.MakeThumbnail(temp, a.JobQueue, userID, thumbPath)
 		if err != nil {
@@ -179,7 +179,7 @@ func (a *API) FileUpload(c *gin.Context) {
 
 			_, err = u.Upload(ctx, &s3.PutObjectInput{
 				Bucket:        a.S3.Bucket,
-				Key:           &fileKey,
+				Key:           aws.String(fileKey + ext),
 				Body:          f,
 				ContentLength: &fh.Size,
 				ContentType:   aws.String("video/mp4"),
@@ -191,7 +191,7 @@ func (a *API) FileUpload(c *gin.Context) {
 		} else {
 			_, err = a.S3.C.PutObject(ctx, &s3.PutObjectInput{
 				Bucket:        a.S3.Bucket,
-				Key:           &fileKey,
+				Key:           aws.String(fileKey + ext),
 				Body:          f,
 				ContentLength: &fh.Size,
 				ContentType:   aws.String("video/mp4"),
@@ -203,46 +203,21 @@ func (a *API) FileUpload(c *gin.Context) {
 		}
 
 		errChan <- nil
-		uploadedIDs = append(uploadedIDs, fileKey)
+		uploadedIDs = append(uploadedIDs, fileKey+ext)
 
 		zap.L().Debug("File uploaded", zap.Duration("took", time.Since(now)))
 	}()
 
+	var duration float64
+
 	// Get video duration and save stuff to DB
 	go func() {
 		defer wg.Done()
-		duration, err := service.GetDuration(temp.Name())
+
+		var err error
+		duration, err = service.GetDuration(temp.Name())
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
-				"error":     "Internal server error",
-				"requestID": requestID,
-			})
-
-			zap.L().Error("Failed to get video duration", zap.Error(err))
-			return
-		}
-
-		zap.L().Debug("Creating database entry for uploaded file")
-
-		fileRecord := model.File{
-			UserID:       userID,
-			FileKey:      fileKey,
-			ThumbKey:     fmt.Sprintf("thumb_%v.webp", strings.TrimSuffix(fileKey, path.Ext(fileKey))),
-			OriginalName: fh.Filename,
-			Size:         size.Load(),
-			Format:       fh.Header.Get("Content-Type"),
-			CreatedAt:    time.Now().Unix(),
-			Duration:     duration,
-			State:        "ready",
-		}
-
-		err = a.DB.WithContext(ctx).Create(&fileRecord).Error
-		if err != nil {
-			zap.L().Error("Failed to insert DB entry", zap.Error(err))
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
-				"error":     "Internal server error",
-				"requestID": requestID,
-			})
+			errChan <- fmt.Errorf("failed to get video duration, %w", err)
 			return
 		}
 
@@ -282,7 +257,29 @@ func (a *API) FileUpload(c *gin.Context) {
 	wg.Wait()
 
 	err = a.DB.
+		Create(model.File{
+			UserID:       userID,
+			FileKey:      fileKey + ext,
+			ThumbKey:     fmt.Sprintf("thumb_%v.webp", fileKey),
+			OriginalName: fh.Filename,
+			Private:      false,
+			Format:       "video/mp4",
+			Views:        0,
+			Size:         size.Load(),
+			State:        "ready",
+			Duration:     duration,
+			CreatedAt:    time.Now().Unix(),
+		}).
 		Error
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+			"error":     "Internal server error",
+			"requestID": requestID,
+		})
+
+		zap.L().Error("Failed to save file record to db", zap.Error(err))
+		return
+	}
 
 	// And after everything is done increment the amount of used storage
 	err = a.DB.
@@ -305,6 +302,6 @@ func (a *API) FileUpload(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"file":  fileKey,
-		"thumb": fmt.Sprintf("thumb_%v.webp", strings.TrimSuffix(fileKey, path.Ext(fileKey))),
+		"thumb": fmt.Sprintf("thumb_%v.webp", fileKey),
 	})
 }
