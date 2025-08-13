@@ -114,7 +114,6 @@ func (a *API) FileUpload(c *gin.Context) {
 
 	ext := path.Ext(fh.Filename)
 	fileKey := util.RandStr(10) + ext
-	var thumbKey string
 	var size atomic.Int64
 
 	wg.Add(3)
@@ -158,7 +157,6 @@ func (a *API) FileUpload(c *gin.Context) {
 
 		uploadedIDs = append(uploadedIDs, t)
 		size.Add(stat.Size())
-		thumbKey = t + ".webp"
 
 		errChan <- nil
 	}()
@@ -229,7 +227,7 @@ func (a *API) FileUpload(c *gin.Context) {
 		fileRecord := model.File{
 			UserID:       userID,
 			FileKey:      fileKey,
-			ThumbKey:     thumbKey,
+			ThumbKey:     fmt.Sprintf("thumb_%v.webp", strings.TrimSuffix(fileKey, path.Ext(fileKey))),
 			OriginalName: fh.Filename,
 			Size:         size.Load(),
 			Format:       fh.Header.Get("Content-Type"),
