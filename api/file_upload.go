@@ -305,6 +305,6 @@ func (a *API) FileUpload(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"file":  fileKey,
-		"thumb": thumbKey,
+		"thumb": fmt.Sprintf("thumb_%v.webp", strings.TrimSuffix(fileKey, path.Ext(fileKey))),
 	})
 }
