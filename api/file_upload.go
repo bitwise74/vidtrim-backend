@@ -76,6 +76,7 @@ func (a *API) FileUpload(c *gin.Context) {
 		})
 		return
 	}
+	f.Seek(0, 0)
 
 	temp, err := os.CreateTemp("", "upload-*.mp4")
 	if err != nil {

@@ -71,6 +71,7 @@ func (a *API) FFmpegProcess(c *gin.Context) {
 		})
 		return
 	}
+	f.Seek(0, 0)
 
 	temp, err := os.CreateTemp("", "upload-*.mp4")
 	if err != nil {
@@ -94,8 +95,6 @@ func (a *API) FFmpegProcess(c *gin.Context) {
 		zap.L().Error("Failed to copy data to temporary file", zap.Error(err))
 		return
 	}
-
-	f.Seek(0, io.SeekStart)
 
 	c.Header("Content-Type", "video/mp4")
 	c.Header("Transfer-Encoding", "chunked")

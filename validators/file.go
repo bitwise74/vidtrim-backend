@@ -3,6 +3,7 @@ package validators
 import (
 	"bitwise74/video-api/model"
 	"errors"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"strings"
@@ -75,22 +76,20 @@ func FileValidator(fh *multipart.FileHeader, db *gorm.DB, userID string) (int, m
 		return http.StatusBadRequest, nil, ErrFileTypeUnsupported
 	}
 
-	// _, err = f.Seek(maxFileSize+1, io.SeekStart)
-	// if err != nil {
-	// 	return http.StatusInternalServerError, nil, err
-	// }
+	_, err = f.Seek(maxFileSize+1, io.SeekStart)
+	if err != nil {
+		return http.StatusInternalServerError, nil, err
+	}
 
-	// buf := make([]byte, 1)
-	// n, err := f.Read(buf)
-	// if err != nil && err != io.EOF {
-	// 	return http.StatusInternalServerError, nil, err
-	// }
+	buf := make([]byte, 1)
+	n, err := f.Read(buf)
+	if err != nil && err != io.EOF {
+		return http.StatusInternalServerError, nil, err
+	}
 
-	// if n > 0 {
-	// 	return http.StatusRequestEntityTooLarge, nil, ErrFileTooLarge
-	// }
-
-	// f.Seek(0, io.SeekStart)
+	if n > 0 {
+		return http.StatusRequestEntityTooLarge, nil, ErrFileTooLarge
+	}
 
 	return 0, f, nil
 }
