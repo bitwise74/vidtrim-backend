@@ -123,15 +123,15 @@ func (a *API) FileUpload(c *gin.Context) {
 	go func() {
 		defer wg.Done()
 		t := "thumb_" + fileKey
-		thumbKey = strings.TrimSuffix(path.Join(os.TempDir(), t), ext) + ".webp"
+		thumbPath := strings.TrimSuffix(path.Join(os.TempDir(), t), ext) + ".webp"
 
-		err = service.MakeThumbnail(temp, a.JobQueue, userID, thumbKey)
+		err = service.MakeThumbnail(temp, a.JobQueue, userID, thumbPath)
 		if err != nil {
 			errChan <- fmt.Errorf("failed to create thumbnail, %w", err)
 			return
 		}
 
-		file, err := os.Open(thumbKey)
+		file, err := os.Open(thumbPath)
 		if err != nil {
 			errChan <- fmt.Errorf("failed to open dest file, %w", err)
 			return
@@ -158,6 +158,7 @@ func (a *API) FileUpload(c *gin.Context) {
 
 		uploadedIDs = append(uploadedIDs, t)
 		size.Add(stat.Size())
+		thumbKey = t + ".webp"
 
 		errChan <- nil
 	}()
