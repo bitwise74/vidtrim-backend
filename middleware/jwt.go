@@ -95,6 +95,15 @@ func NewJWTMiddleware(d *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		admin, ok := claims["admin"].(bool)
+		if !ok {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+				"error":     "Token expired",
+				"requestID": requestID,
+			})
+			return
+		}
+
 		// In case someone logs in to delete their account and then logs in again (that's so fucking stupid I know),
 		// we'll reject the request
 		var found bool
@@ -118,6 +127,7 @@ func NewJWTMiddleware(d *gorm.DB) gin.HandlerFunc {
 		}
 
 		c.Set("userID", userID)
+		c.Set("admin", admin)
 		c.Next()
 	}
 }

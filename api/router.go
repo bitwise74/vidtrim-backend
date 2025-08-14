@@ -92,57 +92,82 @@ func NewRouter() (*API, error) {
 	turnstile := middleware.NewTurnstileMiddleware()
 	maxUploadSize := viper.GetInt64("upload.max_size")
 
-	main := a.Router.Group("/api")
-	{
-		// HEAD /api/heartbeat 		-> Used to check if the server is alive
-		main.HEAD("/heartbeat", a.Heartbeat)
+	/* Endpoints table (all start with /api)
+	METHOD	ENDPOINT		COMMENT
 
-		// HEAD /api/validate		-> Validates a JWT token
-		main.HEAD("/validate", jwt, a.Validate)
-	}
+	--- Health and token validation ---
+	HEAD	/heartbeat		Checks if server is alive
+	HEAD	/validate		Validates a JWT token
 
-	users := main.Group("/users", middleware.BodySizeLimiter(1<<20))
+	--- Users ---
+	GET	/users			Returns stats of the user invoking request
+	POST	/users			Registers a new user
+	POST	/users/login		Manages user login
+	DELETE	/users/:id		Deletes a user
+
+	--- User settings ---
+	GET	/users/me/settings	Returns the current settings of a user
+	PATCH	/users/me/settings	Updates user's settings
+
+	--- Admin ---
+	GET	/admin/users		Lists registered users
+	POST 	/admin/users		Creates a new user
+	PATCH	/admin/users/:id	Updates a user
+	DELETE  /admin/users/:id	Deletes a user optionally marking as banned
+
+	--- App management ---
+	GET	/admin/app/stats	Returns app metrics
+	GET	/admin/app/config	Returns current app config
+	PATCH	/admin/app/config	Updates the app config
+
+	--- Files ---
+	GET 	/files/bulk		Returns user files in bulk
+	GET 	/files/search		Searches through uploaded files
+	POST	/files			Uploads a file
+	DELETE	/files/:id		Deletes a file
+
+	--- FFmpeg ---
+	GET	/ffmpeg/start		Initializes an FFmpeg job
+	GET	/ffmpeg/progress	Returns job progress
+	POST	/ffmpeg/process		Starts an FFmpeg job
+	*/
+
+	api := a.Router.Group("/api")
+
+	api.HEAD("/heartbeat", a.Heartbeat)
+	api.HEAD("/validate", a.Validate)
+
+	users := api.Group("/users", middleware.BodySizeLimiter(1<<20))
 	{
-		// GET /api/users		-> Returns the basic info of a user
 		users.GET("", jwt, a.UserFetch)
-
-		// POST /api/users 		-> Registers a new user
 		users.POST("", a.UserRegister)
-
-		// POST /api/users/login 	-> Logs in a user and returns a JWT token
 		users.POST("/login", a.UserLogin)
-
-		// DELETE /api/users/:id 	-> Deletes a user account
-		// users.DELETE("/:id", jwt)
 	}
 
-	files := main.Group("/files")
+	admin := api.Group("/admin", jwt)
 	{
-		// GET /api/files/:name 	-> Serves a file via presigned urls
-		// files.GET("/:fileID", cacheFor(30), a.FileServe)
+		admin.GET("/users")
+		admin.POST("/users")
+		admin.PATCH("/users/:id")
+		admin.DELETE("/users/:id")
 
-		// GET /api/files/bulk 		-> Returns a user's files in bulk
-		files.GET("/bulk", jwt, a.FileFetchBulk)
-
-		// POST /api/files         	-> Uploads a new file and stores it in the database
-		files.POST("", jwt, middleware.BodySizeLimiter(maxUploadSize), a.FileUpload)
-
-		// DELETE /api/files/:id	-> Deletes a file owned by a user
-		files.DELETE("/:id", jwt, a.FileDelete)
-
-		// GET /api/files/search	-> Searches for files saved in the database
-		files.GET("/search", jwt, cacheFor(15), a.FileSearch)
+		admin.GET("/app/stats")
+		admin.GET("/app/config")
+		admin.PATCH("/app/config")
 	}
 
-	ffmpeg := main.Group("/ffmpeg", jwt)
+	files := api.Group("/files", jwt)
 	{
-		// GET /api/ffmpeg/start	-> Starts an FFmpeg job
+		files.GET("/bulk", a.FileFetchBulk)
+		files.POST("", middleware.BodySizeLimiter(maxUploadSize), a.FileUpload)
+		files.DELETE("/:id", a.FileDelete)
+		files.GET("/search", cacheFor(15), a.FileSearch)
+	}
+
+	ffmpeg := api.Group("/ffmpeg", jwt)
+	{
 		ffmpeg.GET("/start", a.FFMpegStart)
-
-		// GET /api/ffmpeg/progress	-> Returns the progress of a job
 		ffmpeg.GET("/progress", a.FFmpegProgress)
-
-		// POST /api/ffmpeg/process	-> Processes a file provided in a multipart form
 		ffmpeg.POST("/process", turnstile, middleware.BodySizeLimiter(maxUploadSize), a.FFmpegProcess)
 	}
 

@@ -170,7 +170,7 @@ func (q *JobQueue) runFFmpegJob(job *FFmpegJob) error {
 		job.Args = &args
 	}
 
-	cmd := exec.Command("ffmpeg", *job.Args...)
+	cmd := exec.CommandContext(job.Ctx, "ffmpeg", *job.Args...)
 
 	zap.L().Debug("Running FFmpeg command", zap.String("cmd", cmd.String()))
 
@@ -180,25 +180,30 @@ func (q *JobQueue) runFFmpegJob(job *FFmpegJob) error {
 	go func() {
 		scanner := bufio.NewScanner(io.TeeReader(stderrPipe, stderrBuf))
 		for scanner.Scan() {
-			line := scanner.Text()
-
-			if line == "progress=end" {
-				ProgressMap.Store(job.UserID, FFMpegJobStats{
-					JobID:    job.ID,
-					Progress: 100.0,
-				})
+			select {
+			case <-job.Ctx.Done():
 				return
-			}
+			default:
+				line := scanner.Text()
 
-			if after, ok := strings.CutPrefix(line, "out_time_ms="); ok {
-				msStr := after
-				outTimeMs, err := strconv.ParseFloat(msStr, 64)
-				if err == nil {
-					percent := (outTimeMs / (duration * 1000)) / 10
+				if line == "progress=end" {
 					ProgressMap.Store(job.UserID, FFMpegJobStats{
 						JobID:    job.ID,
-						Progress: percent,
+						Progress: 100.0,
 					})
+					return
+				}
+
+				if after, ok := strings.CutPrefix(line, "out_time_ms="); ok {
+					msStr := after
+					outTimeMs, err := strconv.ParseFloat(msStr, 64)
+					if err == nil {
+						percent := (outTimeMs / (duration * 1000)) / 10
+						ProgressMap.Store(job.UserID, FFMpegJobStats{
+							JobID:    job.ID,
+							Progress: percent,
+						})
+					}
 				}
 			}
 		}
@@ -225,6 +230,11 @@ func (q *JobQueue) runFFmpegJob(job *FFmpegJob) error {
 
 	if err := cmd.Wait(); err != nil {
 		zap.L().Error("FFmpeg failed", zap.Error(err), zap.String("stderr", stderrBuf.String()))
+
+		if job.Ctx.Err() != nil {
+			return job.Ctx.Err()
+		}
+
 		return fmt.Errorf("ffmpeg failed: %w", err)
 	}
 

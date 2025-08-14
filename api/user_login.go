@@ -81,6 +81,7 @@ func (a *API) UserLogin(c *gin.Context) {
 		"user_id": user.ID,
 		"type":    "auth",
 		"iat":     time.Now().Unix(),
+		"admin":   false,
 		"exp":     time.Now().Add(time.Hour * 24 * 30).Unix(),
 	})
 	if err != nil {
