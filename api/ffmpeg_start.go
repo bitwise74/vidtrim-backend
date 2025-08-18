@@ -30,9 +30,9 @@ func (a *API) FFMpegStart(c *gin.Context) {
 
 	zap.L().Debug("Started a new FFmpeg job", zap.String("userID", userID), zap.String("jobID", jobID))
 
-	// Delete the job after 3 minutes unless stopped early
+	// Delete the job after a minute unless stopped early
 	go func() {
-		time.Sleep(time.Minute * 3)
+		time.Sleep(time.Minute * 1)
 		service.ProgressMap.Delete(userID)
 	}()
 

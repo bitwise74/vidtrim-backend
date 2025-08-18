@@ -54,7 +54,7 @@ func NewRouter() (*API, error) {
 	a.Router.Use(
 		cors.New(cors.Config{
 			AllowOrigins:     viper.GetStringSlice("host.cors"),
-			AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+			AllowMethods:     []string{"GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"},
 			AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "TurnstileToken", "Range"},
 			ExposeHeaders:    []string{"Content-Length", "Content-Range"},
 			AllowCredentials: true,
@@ -91,8 +91,9 @@ func NewRouter() (*API, error) {
 	jwt := middleware.NewJWTMiddleware(db)
 	turnstile := middleware.NewTurnstileMiddleware()
 	maxUploadSize := viper.GetInt64("upload.max_size")
+	rateLimiter := middleware.RateLimitMiddleware(10, time.Second)
 
-	main := a.Router.Group("/api")
+	main := a.Router.Group("/api", rateLimiter)
 	{
 		// HEAD /api/heartbeat 		-> Used to check if the server is alive
 		main.HEAD("/heartbeat", a.Heartbeat)
@@ -116,22 +117,28 @@ func NewRouter() (*API, error) {
 		// users.DELETE("/:id", jwt)
 	}
 
-	files := main.Group("/files")
+	files := main.Group("/files", jwt)
 	{
-		// GET /api/files/:name 	-> Serves a file via presigned urls
-		// files.GET("/:fileID", cacheFor(30), a.FileServe)
+		// GET /api/files/:id/owns	-> Checks if a user owns a file
+		files.GET("/:id/owns", cacheFor(5*60), a.FileOwns)
+
+		// GET /api/files/:id		-> Returns a file by it's ID if the user owns it
+		files.GET("/:id", a.FileFetch)
 
 		// GET /api/files/bulk 		-> Returns a user's files in bulk
-		files.GET("/bulk", jwt, a.FileFetchBulk)
+		files.GET("/bulk", a.FileFetchBulk)
 
 		// POST /api/files         	-> Uploads a new file and stores it in the database
-		files.POST("", jwt, middleware.BodySizeLimiter(maxUploadSize), a.FileUpload)
+		files.POST("", middleware.BodySizeLimiter(maxUploadSize), a.FileUpload)
+
+		// PATCH /api/files/:id		-> Updates a file
+		files.PATCH("/:id", a.FileEdit)
 
 		// DELETE /api/files/:id	-> Deletes a file owned by a user
-		files.DELETE("/:id", jwt, a.FileDelete)
+		files.DELETE("/:id", a.FileDelete)
 
 		// GET /api/files/search	-> Searches for files saved in the database
-		files.GET("/search", jwt, cacheFor(15), a.FileSearch)
+		files.GET("/search", cacheFor(15), a.FileSearch)
 	}
 
 	ffmpeg := main.Group("/ffmpeg", jwt)
@@ -188,29 +195,6 @@ func makeLogger() {
 
 	log, _ := cfg.Build()
 	zap.ReplaceGlobals(log)
-}
-
-func makeOrigins() []string {
-	configOrigins := viper.GetStringSlice("host.cors")
-
-	// lmao
-	s := ""
-	if viper.GetBool("ssl.enable") {
-		s = "s"
-	}
-
-	if len(configOrigins) <= 0 {
-		return []string{fmt.Sprintf("http%v://%v", s, viper.GetString("host.domain"))}
-	}
-
-	origins := make([]string, len(configOrigins))
-	for _, v := range configOrigins {
-		origins = append(origins, fmt.Sprintf("http%v://%v", s, v))
-	}
-
-	origins = append(origins, fmt.Sprintf("http%v://%v", s, viper.GetString("host.domain")))
-
-	return origins
 }
 
 // TODO: use redis instead
