@@ -53,7 +53,7 @@ services:
     - TMPDIR=/tmp
     ports:
     - "${HOST_PORT-8080}:${HOST_PORT-8080}"
-    build: .
+    image: bitwise74/vidsh:latest
     volumes:
       # Point to your SSL certificates
       - "${HOST_SSL_CERTIFICATE_PATH:-/dev/null}:/certs/:ro"
