@@ -19,7 +19,7 @@ func (a *API) FileSearch(c *gin.Context) {
 
 	searchQuery := strings.ToLower(c.Query("query"))
 	if searchQuery == "" {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+		c.JSON(http.StatusBadRequest, gin.H{
 			"error":     "No search query provided",
 			"requestID": requestID,
 		})
@@ -29,17 +29,17 @@ func (a *API) FileSearch(c *gin.Context) {
 	limitStr := c.DefaultQuery("limit", "10")
 	limit, err := strconv.Atoi(limitStr)
 	if err != nil || !slices.Contains(validLimits, limit) {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+		c.JSON(http.StatusBadRequest, gin.H{
 			"error":     "Invalid limit provided",
 			"requestID": requestID,
 		})
 		return
 	}
 
-	pageStr := c.DefaultQuery("limit", "0")
+	pageStr := c.DefaultQuery("page", "0")
 	page, err := strconv.Atoi(pageStr)
 	if err != nil || page < 0 {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+		c.JSON(http.StatusBadRequest, gin.H{
 			"error":     "Invalid page provided",
 			"requestID": requestID,
 		})
@@ -49,20 +49,26 @@ func (a *API) FileSearch(c *gin.Context) {
 	var results []model.File
 
 	err = a.DB.
-		Where("user_id = ? AND original_name NOT LIKE ? AND LOWER(original_name) LIKE ? ", userID, "thumb_%", "%"+searchQuery+"%").
+		Where("user_id = ? AND original_name LIKE ?", userID, "%"+searchQuery+"%").
 		Order("created_at desc").
 		Offset(page * limit).
 		Limit(limit).
 		Find(&results).
 		Error
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":     "Internal server error",
 			"requestID": requestID,
 		})
 
 		zap.L().Error("Failed to find files by search query", zap.Error(err))
 		return
+	}
+
+	for i, file := range results {
+		version := strconv.Itoa(file.Version)
+		results[i].FileKey = file.FileKey + "?v=" + version
+		results[i].ThumbKey = file.ThumbKey + "?v=" + version
 	}
 
 	c.JSON(http.StatusOK, results)

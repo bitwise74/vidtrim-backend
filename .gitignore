@@ -1,4 +1,4 @@
-config.toml
 .vscode
 *.db
 docker-compose.yml
+.env

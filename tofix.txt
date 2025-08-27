@@ -1,0 +1,3 @@
+- Use opaque tokens instead of jwt for auth
+- Implement resend mail button in /verify
+- Rewrite API things to use the same format of errors

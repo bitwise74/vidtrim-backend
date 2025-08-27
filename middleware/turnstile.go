@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
-	"github.com/spf13/viper"
 )
 
 type response struct {
@@ -17,21 +18,26 @@ type response struct {
 
 func NewTurnstileMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !viper.GetBool("cloudflare.turnstile.enabled") {
+		turnstileEnabled, err := strconv.ParseBool(os.Getenv("TURNSTILE_ENABLED"))
+		if err != nil {
+			turnstileEnabled = false
+		}
+
+		if !turnstileEnabled {
 			c.Next()
 			return
 		}
 
 		token := c.Request.Header.Get("TurnstileToken")
 		if token == "" {
-			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+			c.JSON(http.StatusBadRequest, gin.H{
 				"error": "Missing or invalid turnstile token",
 			})
 			return
 		}
 
 		payload := gin.H{
-			"secret":   viper.GetString("cloudflare.turnstile.secret_token"),
+			"secret":   os.Getenv("TURNSTILE_SECRET_TOKEN"),
 			"response": token,
 			"remoteip": c.ClientIP(),
 		}
@@ -39,7 +45,7 @@ func NewTurnstileMiddleware() gin.HandlerFunc {
 		jsonBody, _ := json.Marshal(payload)
 		resp, err := http.Post("https://challenges.cloudflare.com/turnstile/v0/siteverify", "application/json", bytes.NewReader(jsonBody))
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+			c.JSON(http.StatusUnauthorized, gin.H{
 				"error": "Unauthorized",
 			})
 			return
@@ -50,7 +56,7 @@ func NewTurnstileMiddleware() gin.HandlerFunc {
 
 		var res response
 		if err := json.Unmarshal(respBody, &res); err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+			c.JSON(http.StatusUnauthorized, gin.H{
 				"error": "Unauthorized",
 			})
 			return

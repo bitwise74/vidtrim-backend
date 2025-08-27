@@ -2,8 +2,16 @@ package api
 
 import (
 	"bitwise74/video-api/model"
+	"bitwise74/video-api/service"
+	"bitwise74/video-api/util"
+	"bitwise74/video-api/validators"
+	"context"
+	"io"
 	"net/http"
+	"os"
+	"path"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -11,9 +19,11 @@ import (
 )
 
 type fileEditOpts struct {
-	Name string `json:"name"`
-	// TODO: add ffmpeg opts
+	NewName           *string                       `json:"name,omitempty"`
+	ProcessingOptions *validators.ProcessingOptions `json:"processing_options,omitempty"`
 }
+
+// TODO: edits should regenerate the thumbnail
 
 func (a *API) FileEdit(c *gin.Context) {
 	requestID := c.MustGet("requestID").(string)
@@ -40,9 +50,17 @@ func (a *API) FileEdit(c *gin.Context) {
 		return
 	}
 
-	if strings.TrimSpace(data.Name) == "" {
+	if data.NewName == nil && data.ProcessingOptions == nil {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error":     "No new name provided",
+			"error":     "No edit options provided",
+			"requestID": requestID,
+		})
+		return
+	}
+
+	if data.NewName != nil && *data.NewName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":     "Empty name",
 			"requestID": requestID,
 		})
 		return
@@ -72,18 +90,187 @@ func (a *API) FileEdit(c *gin.Context) {
 		return
 	}
 
-	file.OriginalName = data.Name
+	if data.NewName != nil {
+		file.OriginalName = *data.NewName
+	}
 
-	err = a.DB.
-		Updates(file).
-		Error
+	originalSize := file.Size
+
+	if data.ProcessingOptions != nil {
+		jobEnt, ok := service.ProgressMap.Load(userID)
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":     "No job with this ID found",
+				"requestID": requestID,
+			})
+			return
+		}
+
+		if code, err := validators.ProcessingOptsValidator(data.ProcessingOptions, float64(file.Size)); err != nil {
+			c.JSON(code, gin.H{
+				"error":     err.Error(),
+				"requestID": requestID,
+			})
+			return
+		}
+
+		job := jobEnt.(service.FFMpegJobStats)
+
+		// Download the video to process
+		temp, err := os.CreateTemp("", "process-*.mp4")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":     "Internal server error",
+				"requestID": requestID,
+			})
+
+			zap.L().Error("Failed to create temporary file", zap.Error(err))
+			return
+		}
+		defer temp.Close()
+		defer os.Remove(temp.Name())
+
+		req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, os.Getenv("CLOUDFRONT_URL")+"/"+file.FileKey, nil)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":     "Internal server error",
+				"requestID": requestID,
+			})
+
+			zap.L().Error("Failed to prepare download request", zap.Error(err))
+			return
+		}
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":     "Internal server error",
+				"requestID": requestID,
+			})
+
+			zap.L().Error("Failed to download video from cloudfront", zap.Error(err))
+			return
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			c.JSON(resp.StatusCode, gin.H{
+				"error":     "Failed to fetch file",
+				"requestID": requestID,
+			})
+			zap.L().Error("CloudFront returned non-OK status", zap.Int("status", resp.StatusCode))
+			return
+		}
+		defer resp.Body.Close()
+
+		if _, err := io.Copy(temp, resp.Body); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":     "Internal server error",
+				"requestID": requestID,
+			})
+
+			zap.L().Error("Failed to copy file to temp", zap.Error(err))
+			return
+		}
+		temp.Seek(0, 0)
+
+		ctxReq := c.Request.Context()
+		ctxTimeout, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+
+		ctx, cancelMerged := util.MergeContexts(ctxReq, ctxTimeout)
+		defer cancelMerged()
+
+		done := make(chan error, 1)
+
+		tempProcessed, err := os.CreateTemp("", "processed-*.mp4")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":     "Internal server error",
+				"requestID": requestID,
+			})
+
+			zap.L().Error("Failed to create processed file", zap.Error(err))
+			return
+		}
+		defer tempProcessed.Close()
+		defer os.Remove(tempProcessed.Name())
+
+		err = a.JobQueue.Enqueue(&service.FFmpegJob{
+			ID:       job.JobID,
+			UserID:   userID,
+			FilePath: temp.Name(),
+			Opts:     data.ProcessingOptions,
+			Output:   tempProcessed,
+			Ctx:      ctx,
+			Done:     done,
+		})
+		if err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error":     "FFmpeg job queue is full. Please try again later",
+				"requestID": requestID,
+			})
+			return
+		}
+		if err := <-done; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":     "Internal server error",
+				"requestID": requestID,
+			})
+
+			zap.L().Error("FFmpeg failed", zap.Error(err))
+			return
+		}
+
+		keyNoExt := strings.TrimSuffix(file.FileKey, path.Ext(file.FileKey))
+
+		newFile, err := a.Uploader.Do(tempProcessed.Name(), file.OriginalName, userID, keyNoExt)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":     "internal_server_error",
+				"requestID": requestID,
+			})
+
+			zap.L().Error("Failed to upload edited video to S3", zap.Error(err))
+			return
+		}
+
+		zap.L().Debug("New object put to s3")
+
+		file.Duration = newFile.Duration
+		file.Size = newFile.Size
+	}
+
+	file.Version++
+
+	err = a.DB.Transaction(
+		func(tx *gorm.DB) error {
+			err := tx.Updates(file).Error
+			if err != nil {
+				return err
+			}
+
+			if originalSize != file.Size {
+				err := tx.
+					Model(model.Stats{}).
+					Where("user_id = ?", userID).
+					Updates(map[string]any{
+						"used_storage": gorm.Expr("used_storage - ?", originalSize-file.Size),
+					}).Error
+				if err != nil {
+					return err
+				}
+			}
+
+			return nil
+		},
+	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":     "Internal server error",
 			"requestID": requestID,
 		})
 
-		zap.L().Error("Failed to update file entry", zap.Error(err))
+		zap.L().Error("Failed to commit transaction after file edit", zap.Error(err))
 		return
 	}
 

@@ -1,7 +1,9 @@
 package api
 
 import (
+	"bitwise74/video-api/model"
 	"bitwise74/video-api/service"
+	"bitwise74/video-api/util"
 	"bitwise74/video-api/validators"
 	"context"
 	"errors"
@@ -11,16 +13,18 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin/binding"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 func (a *API) FFmpegProcess(c *gin.Context) {
 	requestID := c.MustGet("requestID").(string)
-	jobID := c.Query("jobID")
 	userID := c.MustGet("userID").(string)
+	jobID := c.Query("jobID")
 
 	if _, ok := service.ProgressMap.Load(userID); !ok {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+		c.JSON(http.StatusBadRequest, gin.H{
 			"error":     "Invalid job ID",
 			"requestID": requestID,
 		})
@@ -28,36 +32,25 @@ func (a *API) FFmpegProcess(c *gin.Context) {
 	}
 
 	var opts validators.ProcessingOptions
-	if err := c.Bind(&opts); err != nil {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
-			"error":     "Failed to read multipart body",
+	if err := c.MustBindWith(&opts, binding.FormMultipart); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":     "Failed to read form body",
 			"requestID": requestID,
 		})
 
-		zap.L().Error("Failed to read multipart body", zap.Error(err))
+		zap.L().Error("Failed to read form body", zap.Error(err))
 		return
 	}
 
-	fh, err := c.FormFile("file")
-	if err != nil {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
-			"error":     "Internal server error",
-			"requestID": requestID,
-		})
-
-		zap.L().Error("Failed to open multipart file", zap.Error(err))
-		return
-	}
-
-	if code, err := validators.ProcessingOptsValidator(&opts, fh); err != nil {
-		c.AbortWithStatusJSON(code, gin.H{
+	if code, err := validators.ProcessingOptsValidator(&opts, float64(opts.File.Size)); err != nil {
+		c.JSON(code, gin.H{
 			"error":     err.Error(),
 			"requestID": requestID,
 		})
 		return
 	}
 
-	code, f, err := validators.FileValidator(fh, nil, "")
+	code, f, err := validators.FileValidator(opts.File, nil, "")
 	if err != nil {
 		if code == http.StatusInternalServerError {
 			zap.L().Error("Failed to validate file", zap.Error(err))
@@ -65,17 +58,18 @@ func (a *API) FFmpegProcess(c *gin.Context) {
 			err = errors.New("internal server error")
 		}
 
-		c.AbortWithStatusJSON(code, gin.H{
+		c.JSON(code, gin.H{
 			"error":     err.Error(),
 			"requestID": requestID,
 		})
 		return
 	}
+
 	f.Seek(0, 0)
 
-	temp, err := os.CreateTemp("", "upload-*.mp4")
+	tempFile, err := os.CreateTemp("", "upload-*.mp4")
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":     "Internal server error",
 			"requestID": requestID,
 		})
@@ -83,11 +77,11 @@ func (a *API) FFmpegProcess(c *gin.Context) {
 		zap.L().Error("Failed to create temporary file", zap.Error(err))
 		return
 	}
-	defer os.Remove(temp.Name())
+	defer os.Remove(tempFile.Name())
 
-	_, err = io.Copy(temp, f)
+	_, err = io.Copy(tempFile, f)
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":     "Internal server error",
 			"requestID": requestID,
 		})
@@ -96,31 +90,94 @@ func (a *API) FFmpegProcess(c *gin.Context) {
 		return
 	}
 
-	c.Header("Content-Type", "video/mp4")
-	c.Header("Transfer-Encoding", "chunked")
+	if !opts.SaveToCloud {
+		c.Header("Content-Type", "video/mp4")
+		c.Header("Transfer-Encoding", "chunked")
+
+		ctxReq := c.Request.Context()
+		ctxTimeout, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+
+		ctx, cancelMerged := util.MergeContexts(ctxReq, ctxTimeout)
+		defer cancelMerged()
+
+		done := make(chan error, 1)
+		// Enqueue can only error if the queue is full
+		err = a.JobQueue.Enqueue(&service.FFmpegJob{
+			ID:       jobID,
+			UserID:   userID,
+			FilePath: tempFile.Name(),
+			Output:   c.Writer,
+			Opts:     &opts,
+			Ctx:      ctx,
+			Done:     done,
+		})
+		if err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error":     "Job queue is full. Please wait a moment before trying again",
+				"requestID": requestID,
+			})
+
+			zap.L().Warn("FFmpeg job queue is full")
+			return
+		}
+
+		select {
+		case err := <-done:
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"error":     "Internal server error",
+					"requestID": requestID,
+				})
+
+				zap.L().Error("FFmpeg job failed", zap.Error(err))
+				return
+			}
+		case <-ctx.Done():
+			c.JSON(http.StatusRequestTimeout, gin.H{
+				"error":     "Request was cancelled or timed out",
+				"requestID": requestID,
+			})
+
+			zap.L().Warn("Request context done before FFmpeg finished", zap.Error(ctx.Err()))
+			return
+		}
+
+		close(done)
+		return
+	}
+
+	tempProcessed, err := os.CreateTemp("", "processed-*.mp4")
+	if err != nil {
+		c.JSON(http.StatusRequestTimeout, gin.H{
+			"error":     "internal_server_error",
+			"requestID": requestID,
+		})
+
+		zap.L().Warn("Failed to create temp file for processing", zap.Error(err))
+		return
+	}
 
 	ctxReq := c.Request.Context()
 	ctxTimeout, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	ctx, cancelMerged := mergeContexts(ctxReq, ctxTimeout)
+	ctx, cancelMerged := util.MergeContexts(ctxReq, ctxTimeout)
 	defer cancelMerged()
 
 	done := make(chan error, 1)
-
 	// Enqueue can only error if the queue is full
 	err = a.JobQueue.Enqueue(&service.FFmpegJob{
-		ID:         jobID,
-		UserID:     userID,
-		FilePath:   temp.Name(),
-		Output:     c.Writer,
-		Opts:       &opts,
-		Ctx:        ctx,
-		CancelFunc: cancelMerged,
-		Done:       done,
+		ID:       jobID,
+		UserID:   userID,
+		FilePath: tempFile.Name(),
+		Output:   tempProcessed,
+		Opts:     &opts,
+		Ctx:      ctx,
+		Done:     done,
 	})
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
+		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"error":     "Job queue is full. Please wait a moment before trying again",
 			"requestID": requestID,
 		})
@@ -132,7 +189,7 @@ func (a *API) FFmpegProcess(c *gin.Context) {
 	select {
 	case err := <-done:
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+			c.JSON(http.StatusInternalServerError, gin.H{
 				"error":     "Internal server error",
 				"requestID": requestID,
 			})
@@ -141,7 +198,7 @@ func (a *API) FFmpegProcess(c *gin.Context) {
 			return
 		}
 	case <-ctx.Done():
-		c.AbortWithStatusJSON(http.StatusRequestTimeout, gin.H{
+		c.JSON(http.StatusRequestTimeout, gin.H{
 			"error":     "Request was cancelled or timed out",
 			"requestID": requestID,
 		})
@@ -151,20 +208,45 @@ func (a *API) FFmpegProcess(c *gin.Context) {
 	}
 
 	close(done)
-}
 
-func mergeContexts(ctx1, ctx2 context.Context) (context.Context, context.CancelFunc) {
-	merged, cancel := context.WithCancel(context.Background())
+	fileEnt, err := a.Uploader.Do(tempProcessed.Name(), opts.File.Filename, userID)
+	if err != nil {
+		c.JSON(http.StatusRequestTimeout, gin.H{
+			"error":     "internal_server_error",
+			"requestID": requestID,
+		})
 
-	go func() {
-		select {
-		case <-ctx1.Done():
-			cancel()
-		case <-ctx2.Done():
-			cancel()
-		case <-merged.Done():
+		zap.L().Warn("Failed to upload file to S3", zap.Error(err))
+		return
+	}
+
+	err = a.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&fileEnt).Error; err != nil {
+			return err
 		}
-	}()
 
-	return merged, cancel
+		if err := tx.
+			Model(model.Stats{}).
+			Where("user_id = ?", userID).
+			Updates(map[string]any{
+				"used_storage":   gorm.Expr("used_storage + ?", fileEnt.Size),
+				"uploaded_files": gorm.Expr("uploaded_files + ?", 1),
+			}).
+			Error; err != nil {
+			return err
+		}
+
+		return nil
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":     "Internal server error",
+			"requestID": requestID,
+		})
+
+		zap.L().Error("Database transaction failed", zap.String("requestID", requestID), zap.Error(err))
+		return
+	}
+
+	c.Status(http.StatusOK)
 }

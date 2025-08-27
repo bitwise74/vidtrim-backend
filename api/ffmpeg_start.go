@@ -15,7 +15,7 @@ func (a *API) FFMpegStart(c *gin.Context) {
 	userID := c.MustGet("userID").(string)
 
 	if _, ok := service.ProgressMap.Load(userID); ok {
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+		c.JSON(http.StatusForbidden, gin.H{
 			"error":     "A job is running already. Wait for it to finish first",
 			"requestID": requestID,
 		})

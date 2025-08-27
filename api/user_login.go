@@ -3,11 +3,12 @@ package api
 import (
 	"bitwise74/video-api/model"
 	"net/http"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/spf13/viper"
 	"go.uber.org/zap"
 )
 
@@ -21,7 +22,7 @@ func (a *API) UserLogin(c *gin.Context) {
 
 	var data loginBody
 	if err := c.ShouldBind(&data); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+		c.JSON(http.StatusBadRequest, gin.H{
 			"error":     "Invalid request body",
 			"requestID": requestID,
 		})
@@ -31,7 +32,7 @@ func (a *API) UserLogin(c *gin.Context) {
 	}
 
 	if data.Email == "" {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+		c.JSON(http.StatusBadRequest, gin.H{
 			"error":     "Email field can't be empty",
 			"requestID": requestID,
 		})
@@ -39,7 +40,7 @@ func (a *API) UserLogin(c *gin.Context) {
 	}
 
 	if data.Password == "" {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+		c.JSON(http.StatusBadRequest, gin.H{
 			"error":     "Password field can't be empty",
 			"requestID": requestID,
 		})
@@ -49,7 +50,7 @@ func (a *API) UserLogin(c *gin.Context) {
 	var user model.User
 
 	if err := a.DB.Where("email = ?", data.Email).First(&user).Error; err != nil {
-		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{
+		c.JSON(http.StatusNotFound, gin.H{
 			"error":     "User not found",
 			"requestID": requestID,
 		})
@@ -60,7 +61,7 @@ func (a *API) UserLogin(c *gin.Context) {
 
 	ok, err := a.Argon.VerifyPasswd(data.Password, user.PasswordHash)
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":     "Internal server error",
 			"requestID": requestID,
 		})
@@ -70,8 +71,8 @@ func (a *API) UserLogin(c *gin.Context) {
 	}
 
 	if !ok {
-		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-			"error":     "Invalid credentials",
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error":     "credentials_invalid",
 			"requestID": requestID,
 		})
 		return
@@ -84,7 +85,7 @@ func (a *API) UserLogin(c *gin.Context) {
 		"exp":     time.Now().Add(time.Hour * 24 * 30).Unix(),
 	})
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":     "Internal server error",
 			"requestID": requestID,
 		})
@@ -93,14 +94,21 @@ func (a *API) UserLogin(c *gin.Context) {
 		return
 	}
 
-	c.SetCookie("auth_token", authToken, 60*60*24*30, "/", "", viper.GetBool("ssl.enabled"), true)
-	c.SetCookie("logged_in", "1", 60*60*24*30, "/", "", viper.GetBool("ssl.enabled"), false)
+	sslEnabled, err := strconv.ParseBool("HOST_SSL_ENABLED")
+	if err != nil {
+		sslEnabled = false
+	}
+
+	c.SetCookie("user_id", user.ID, 9999999, "/", "", sslEnabled, false)
+	c.SetCookie("auth_token", authToken, 60*60*24*30, "/", "", sslEnabled, true)
+	c.SetCookie("logged_in", "1", 60*60*24*30, "/", "", sslEnabled, false)
 	c.JSON(http.StatusOK, gin.H{
-		"userID": user.ID,
+		"userID":   user.ID,
+		"verified": user.Verified,
 	})
 }
 
 func makeToken(c *jwt.MapClaims) (string, error) {
 	t := jwt.NewWithClaims(jwt.SigningMethodHS256, c)
-	return t.SignedString([]byte(viper.GetString("jwt_secret")))
+	return t.SignedString([]byte(os.Getenv("SECURITY_JWT_SECRET")))
 }

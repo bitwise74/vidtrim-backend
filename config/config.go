@@ -3,6 +3,7 @@
 package config
 
 import (
+	"bitwise74/video-api/util"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -10,15 +11,19 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"strconv"
+	"time"
 
-	"github.com/spf13/pflag"
-	v "github.com/spf13/viper"
+	"github.com/joho/godotenv"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
-var (
-	validLogLevels    = []string{"debug", "info", "warn", "error", "fatal"}
-	validStorageTypes = []string{"s3", "local"}
+var validLogLevels = []string{"debug", "info", "warn", "error"}
+
+const (
+	gray  = "\x1b[90m"
+	reset = "\x1b[0m"
 )
 
 func genSecret() string {
@@ -27,170 +32,203 @@ func genSecret() string {
 	return hex.EncodeToString(b)
 }
 
+func checkRunningInDocker() bool {
+	_, err := os.Stat("/.dockerenv")
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false
+		}
+
+		panic(err)
+	}
+
+	return true
+}
+
+func makeLogger() {
+	// Configure logger as soon as we know the log level is valid
+	atom := zap.NewAtomicLevel()
+
+	switch os.Getenv("APP_LOG_LEVEL") {
+	case "debug":
+		atom.SetLevel(zap.DebugLevel)
+	case "warn":
+		atom.SetLevel(zap.WarnLevel)
+	case "error":
+		atom.SetLevel(zap.ErrorLevel)
+	case "fatal":
+		atom.SetLevel(zap.FatalLevel)
+	default:
+		atom.SetLevel(zap.InfoLevel)
+	}
+
+	cfg := zap.NewDevelopmentConfig()
+	cfg.Level = atom
+	cfg.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+	cfg.EncoderConfig.EncodeTime = func(t time.Time, pae zapcore.PrimitiveArrayEncoder) {
+		pae.AppendString(gray + t.Format("15:04:05.000") + reset)
+	}
+	cfg.EncoderConfig.EncodeCaller = func(ec zapcore.EntryCaller, pae zapcore.PrimitiveArrayEncoder) {
+		pae.AppendString(gray + ec.TrimmedPath() + reset)
+	}
+
+	cfg.DisableStacktrace = true
+
+	log, _ := cfg.Build()
+	zap.ReplaceGlobals(log)
+}
+
 // Setup prepares everything config-related so that the app can
 // start working. Function will return an error if something
 // is critically wrong and the application can't run because of
 // that.
 func Setup() error {
-	pflag.Parse()
-	v.BindPFlags(pflag.CommandLine)
-
-	v.SetConfigName("config")
-	v.SetConfigType("toml")
-	v.AddConfigPath(".")
-
-	v.AutomaticEnv()
-
-	//
-	// ENVS
-	//
-	v.BindEnv("app.log_level", "APP_LOG_LEVEL")
-
-	v.BindEnv("host.port", "HOST_PORT")
-	v.BindEnv("host.domain", "HOST_DOMAIN")
-	v.BindEnv("host.cors", "HOST_CORS")
-
-	v.BindEnv("host.ssl.enabled", "HOST_SSL_ENABLED")
-	v.BindEnv("host.ssl.certificate_path", "HOST_SSL_CERTIFICATE_PATH")
-	v.BindEnv("host.ssl.certificate_key_path", "HOST_SSL_CERTIFICATE_KEY_PATH")
-
-	v.BindEnv("ffmpeg.path", "FFMPEG_PATH")
-	v.BindEnv("ffmpeg.hwaccel_flags", "FFMPEG_HWACCEL_FLAGS")
-	v.BindEnv("ffmpeg.max_jobs", "FFMPEG_MAX_JOBS")
-	v.BindEnv("ffmpeg.workers", "FFMPEG_WORKERS")
-
-	v.BindEnv("jwt.secret", "JWT_SECRET")
-
-	v.BindEnv("storage.type", "STORAGE_TYPE")
-	v.BindEnv("storage.max_usage", "STORAGE_MAX_USAGE")
-
-	v.BindEnv("upload.max_size", "UPLOAD_MAX_SIZE")
-	v.BindEnv("upload.allowed_types", "UPLOAD_ALLOWED_TYPES")
-
-	v.BindEnv("aws.access_key_id", "AWS_ACCESS_KEY_ID")
-	v.BindEnv("aws.secret_access_key", "AWS_SECRET_ACCESS_KEY")
-	v.BindEnv("aws.bucket", "AWS_BUCKET")
-	v.BindEnv("aws.region", "AWS_REGION")
-	v.BindEnv("aws.cloudfront_url", "AWS_CLOUDFRONT_URL")
-
-	v.BindEnv("cloudflare.turnstile.enabled", "CLOUDFLARE_TURNSTILE_ENABLED")
-	v.BindEnv("cloudflare.turnstile.secret_token", "CLOUDFLARE_TURNSTILE_SECRET_TOKEN")
-
-	//
-	// Defaults
-	//
-	v.SetDefault("app.log_level", "info")
-
-	v.SetDefault("host.port", 8080)
-	v.SetDefault("host.domain", "localhost")
-
-	v.SetDefault("host.ssl_enabled", false)
-
-	v.SetDefault("storage.type", "local")
-
-	v.SetDefault("upload.max_size", 50)
-	v.SetDefault("upload.allowed_types", []string{"video/mp4"})
-
-	v.SetDefault("cloudflare.turnstile.enabled", false)
-
-	// Wont do anything for docker
-	v.ReadInConfig()
-
-	if !slices.Contains(validLogLevels, v.GetString("app.log_level")) {
-		return errors.New("invalid log level provided")
-	}
-
-	if v.GetInt("upload.max_size") <= 0 {
-		return errors.New("upload.max_size must be bigger than 0")
-	}
-
-	if v.GetInt("host.port") <= 0 {
-		return errors.New("invalid port provided")
-	}
-
-	if v.GetBool("host.ssl.enabled") {
-		if v.GetString("host.ssl.certificate_path") == "" {
-			return errors.New("no ssl certificate path provided")
-		}
-
-		if v.GetString("host.ssl.certificate_key_path") == "" {
-			return errors.New("no ssl certificate key path provided")
+	if !checkRunningInDocker() {
+		if err := godotenv.Load(); err != nil {
+			return fmt.Errorf("failed to read .env file, %w", err)
 		}
 	}
 
-	// Test if ffmpeg present in path. If not try to use the user provided one
+	if l := os.Getenv("APP_LOG_LEVEL"); l == "" || !slices.Contains(validLogLevels, l) {
+		os.Setenv("APP_LOG_LEVEL", "info")
+	}
+
+	makeLogger()
+
+	if os.Getenv("HOST_PORT") == "" {
+		return errors.New("no port provided")
+	}
+
+	if os.Getenv("HOST_DOMAIN") == "" {
+		return errors.New("no domain provided")
+	}
+
+	if os.Getenv("HOST_CORS") == "" {
+		return errors.New("no cors origins provided")
+	}
+
+	if os.Getenv("HOST_SSL_ENABLED") == "true" {
+		if os.Getenv("HOST_SSL_CERTIFICATE_PATH") == "" {
+			return errors.New("no SSL certificate provided")
+		}
+
+		if os.Getenv("HOST_SSL_CERTIFICATE_KEY_PATH") == "" {
+			return errors.New("no SSL certificate key provided")
+		}
+	}
+
+	// Test if ffmpeg is present
 	err := exec.Command("ffmpeg", "-version").Run()
 	if err != nil {
-		err = exec.Command(v.GetString("ffmpeg.path"), "-version").Run()
-		if err != nil {
+		if path := os.Getenv("FFMPEG_PATH"); path != "" {
+			zap.L().Debug("FFmpeg not found in path. Trying user provided path")
+			err = exec.Command(path, "-version").Run()
+			if err != nil {
+				return errors.New("ffmpeg not found")
+			}
+		} else {
 			return errors.New("ffmpeg not found")
 		}
 	}
 
-	if v.GetInt("ffmpeg.max_jobs") <= 0 {
-		return errors.New("max job queue size must be at least 1")
+	if os.Getenv("FFMPEG_USE_GPU") == "true" {
+		gpu, err := util.DetectGPU()
+		if err != nil {
+			zap.L().Warn("Failed to detect GPU, ffmpeg won't use it to encode/decode", zap.Error(err))
+			os.Setenv("FFMPEG_USE_GPU", "false")
+		}
+
+		if gpu == "" {
+			os.Setenv("FFMPEG_USE_GPU", "false")
+			zap.L().Warn("No GPU detected. If it exists ffmpeg won't be able to use it to encode/decode")
+		}
+
+		switch gpu {
+		case "nvidia":
+			os.Setenv("FFMPEG_HWACCEL", "cuda")
+			os.Setenv("FFMPEG_ENCODER", "h264_nvenc")
+		case "amd":
+			os.Setenv("FFMPEG_HWACCEL", "qsv")
+			os.Setenv("FFMPEG_ENCODER", "h264_qsv")
+		case "intel":
+			os.Setenv("FFMPEG_HWACCEL", "vaapi")
+			os.Setenv("FFMPEG_ENCODER", "h264_vaapi")
+		default:
+			zap.L().Warn("Unknown GPU detected, ffmpeg won't use it to encode/decode", zap.String("gpu", gpu))
+			os.Setenv("FFMPEG_USE_GPU", "false")
+		}
+
+		zap.L().Debug("Detected GPU", zap.String("vendor", gpu))
 	}
 
-	if v.GetInt("ffmpeg.workers") <= 0 {
-		return errors.New("ffmpeg workers must be set to at least 1")
+	if val, err := strconv.Atoi(os.Getenv("FFMPEG_MAX_JOBS")); err != nil {
+		return errors.New("FFMPEG_MAX_JOBS is not a valid integer")
+	} else if val <= 0 {
+		return errors.New("FFMPEG_MAX_JOBS must be set least 1")
 	}
 
-	if v.GetString("jwt.secret") == "" {
-		fmt.Println("WARNING: You haven't set a JWT secret, so it has been generated for you. Please set it as an environment variable or in the config.toml file.\nYour random JWT secret:\n\n" + genSecret() + "\n\nPaste it into your config.toml file.")
+	if val, err := strconv.Atoi(os.Getenv("FFMPEG_WORKERS")); err != nil {
+		return errors.New("FFMPEG_WORKERS is not a valid integer")
+	} else if val <= 0 {
+		return errors.New("FFMPEG_WORKERS must be set least 1")
+	}
+
+	if os.Getenv("SECURITY_JWT_SECRET") == "" {
+		zap.L().Warn("You haven't set a JWT secret, so it has been generated for you. Please set it as an environment variable or in the config.toml file.", zap.String("secret", genSecret()))
 		os.Exit(0)
 	}
 
-	if v.GetString("upload.allowed_types") == "" {
-		zap.L().Warn("No upload.allowed_types specified, any file type will be accepted")
+	if val, err := strconv.Atoi(os.Getenv("SECURITY_RATE_LIMIT")); err != nil || val <= 0 {
+		os.Setenv("SECURITY_RATE_LIMIT", "15")
 	}
 
-	switch v.GetString("storage.type") {
-	case "s3":
-		{
-			if v.GetString("aws.access_key_id") == "" {
-				return errors.New("account access id can't be empty")
-			}
-			if v.GetString("aws.secret_access_key") == "" {
-				return errors.New("secret access key can't be empty")
-			}
-			if v.GetString("aws.bucket") == "" {
-				return errors.New("bucket can't be empty")
-			}
-			if v.GetString("aws.region") == "" {
-				return errors.New("region can't be empty")
-			}
-			if v.GetString("aws.cloudfront_url") == "" {
-				return errors.New("cloudfront url can't be empty")
-			}
-		}
-	case "local":
-		{
-			return errors.New("not supported yet")
-		}
-	default:
-		return errors.New("invalid storage type provided")
-	}
-
-	if !slices.Contains(validStorageTypes, v.GetString("storage.type")) {
-		return errors.New("invalid storage type provided")
-	}
-
-	if v.GetInt("storage.max_usage") <= 0 {
-		return errors.New("max usage must be bigger than 0")
-	}
-
-	if v.GetInt("upload.max_size") <= 0 {
-		return errors.New("max upload size must be bigger than 0")
-	}
-
-	if !v.GetBool("cloudflare.turnstile.enabled") {
-		fmt.Println("[WARNING]: Cloudflare's turnstile is disabled. Some public endpoints won't be guarded against bots")
+	if v := os.Getenv("MAIL_CONFIRMATIONS_ENABLE"); v != "true" {
+		zap.L().Warn("Email verifications are disabled. Users won't be able to reset password and attackers will be able to create infinite accounts")
 	} else {
-		if v.GetString("cloudflare.turnstile.secret_token") == "" {
-			return errors.New("turnstile secret token is missing")
+		if os.Getenv("MAIL_SENDER_ADDRESS") == "" {
+			return errors.New("no sender address provided")
+		}
+
+		if os.Getenv("MAIL_HOST") == "" {
+			return errors.New("no mail host provided")
+		}
+
+		if os.Getenv("MAIL_PORT") == "" {
+			return errors.New("no mail host port provided")
+		}
+
+		if os.Getenv("MAIL_PASSWORD") == "" {
+			return errors.New("no mail host password provided")
 		}
 	}
 
-	v.Set("upload.max_size", v.GetInt64("upload.max_size")<<20)
+	if s := os.Getenv("STORAGE_TYPE"); s == "s3" {
+		if os.Getenv("ACCESS_KEY_ID") == "" {
+			return errors.New("no access key id provided")
+		}
+
+		if os.Getenv("SECRET_ACCESS_KEY") == "" {
+			return errors.New("no secret access key provided")
+		}
+
+		if os.Getenv("REGION") == "" {
+			return errors.New("no region provided")
+		}
+
+		if os.Getenv("BUCKET") == "" {
+			return errors.New("no bucket provided")
+		}
+	} else {
+		return errors.New("invalid STORAGE_TYPE provided")
+	}
+
+	if os.Getenv("TURNSTILE_ENABLE") == "false" {
+		zap.L().Warn("Turnstile is disabled. FFmpeg endpoints won't be guarded against bots")
+	} else {
+		if os.Getenv("TURNSTILE_SECRET_TOKEN") == "" {
+			return errors.New("no turnstile secret token provided")
+		}
+	}
+
 	return nil
 }

@@ -24,7 +24,7 @@ func (a *API) FileDelete(c *gin.Context) {
 
 	fileID := c.Param("id")
 	if fileID == "" {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+		c.JSON(http.StatusBadRequest, gin.H{
 			"error":     "ID is missing",
 			"requestID": requestID,
 		})
@@ -36,19 +36,19 @@ func (a *API) FileDelete(c *gin.Context) {
 	err := a.DB.
 		Model(model.File{}).
 		Where("user_id = ? AND id = ?", userID, fileID).
-		Select("file_key, thumb_key, size").
+		Select("file_key", "thumb_key", "size").
 		First(&info).
 		Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
-			c.AbortWithStatusJSON(http.StatusNotFound, gin.H{
+			c.JSON(http.StatusNotFound, gin.H{
 				"error":     "File not found. It either doesn't exist or you don't own it",
 				"requestID": requestID,
 			})
 			return
 		}
 
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":     "Internal server error",
 			"requestID": requestID,
 		})
@@ -62,7 +62,7 @@ func (a *API) FileDelete(c *gin.Context) {
 		Delete(model.File{}).
 		Error
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":     "Internal server error",
 			"requestID": requestID,
 		})
@@ -81,7 +81,7 @@ func (a *API) FileDelete(c *gin.Context) {
 		},
 	})
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":     "Internal server error",
 			"requestID": requestID,
 		})
@@ -103,7 +103,7 @@ func (a *API) FileDelete(c *gin.Context) {
 		}).
 		Error
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":     "Internal server error",
 			"requestID": requestID,
 		})
@@ -119,7 +119,7 @@ func (a *API) FileDelete(c *gin.Context) {
 		First(&newStats).
 		Error
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":     "Internal server error",
 			"requestID": requestID,
 		})

@@ -3,6 +3,7 @@ package api
 import (
 	"bitwise74/video-api/model"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -23,7 +24,7 @@ func (a *API) UserFetch(c *gin.Context) {
 		Find(&videos).
 		Error
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":     "Internal server error",
 			"requestID": requestID,
 		})
@@ -32,13 +33,19 @@ func (a *API) UserFetch(c *gin.Context) {
 		return
 	}
 
+	for i, file := range videos {
+		version := strconv.Itoa(file.Version)
+		videos[i].FileKey = file.FileKey + "?v=" + version
+		videos[i].ThumbKey = file.ThumbKey + "?v=" + version
+	}
+
 	var stats model.Stats
 	err = a.DB.
 		Where("user_id = ?", userID).
 		First(&stats).
 		Error
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":     "Internal server error",
 			"requestID": requestID,
 		})

@@ -4,11 +4,12 @@ import (
 	"bitwise74/video-api/model"
 	"fmt"
 	"net/http"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/spf13/viper"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -19,11 +20,19 @@ func NewJWTMiddleware(d *gorm.DB) gin.HandlerFunc {
 
 		tokenStr, err := c.Cookie("auth_token")
 		if err != nil {
-			zap.L().Error("Failed to get token cookie", zap.Error(err))
+			if err == http.ErrNoCookie {
+				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+					"error":     "No auth_token cookie",
+					"requestID": requestID,
+				})
+				return
+			}
 
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"error": "Unauthorized",
+				"error": "account_not_verified",
 			})
+
+			zap.L().Error("Failed to get token cookie", zap.Error(err))
 			return
 		}
 
@@ -32,11 +41,11 @@ func NewJWTMiddleware(d *gorm.DB) gin.HandlerFunc {
 				return nil, fmt.Errorf("unexpected signing method: %s", t.Method.Alg())
 			}
 
-			return []byte(viper.GetString("jwt_secret")), nil
+			return []byte(os.Getenv("SECURITY_JWT_SECRET")), nil
 		})
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"error":     "Invalid token",
+				"error":     "token_invalid",
 				"requestID": requestID,
 			})
 
@@ -46,7 +55,7 @@ func NewJWTMiddleware(d *gorm.DB) gin.HandlerFunc {
 
 		if !token.Valid {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"error": "Invalid token",
+				"error": "token_invalid",
 			})
 			return
 		}
@@ -54,7 +63,7 @@ func NewJWTMiddleware(d *gorm.DB) gin.HandlerFunc {
 		claims, ok := token.Claims.(jwt.MapClaims)
 		if !ok {
 			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
-				"error":     "Missing or invalid token claims",
+				"error":     "token_invalid",
 				"requestID": requestID,
 			})
 			return
@@ -63,7 +72,7 @@ func NewJWTMiddleware(d *gorm.DB) gin.HandlerFunc {
 		userID, ok := claims["user_id"].(string)
 		if !ok {
 			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
-				"error":     "Internal server error",
+				"error":     "internal_server_error",
 				"requestID": requestID,
 			})
 			return
@@ -72,7 +81,7 @@ func NewJWTMiddleware(d *gorm.DB) gin.HandlerFunc {
 		expRaw, ok := claims["exp"]
 		if !ok {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"error":     "Token expired or invalid format",
+				"error":     "token_expired",
 				"requestID": requestID,
 			})
 			return
@@ -81,7 +90,7 @@ func NewJWTMiddleware(d *gorm.DB) gin.HandlerFunc {
 		exp, ok := expRaw.(float64)
 		if !ok {
 			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
-				"error":     "Internal server error",
+				"error":     "internal_server_error",
 				"requestID": requestID,
 			})
 			return
@@ -89,7 +98,7 @@ func NewJWTMiddleware(d *gorm.DB) gin.HandlerFunc {
 
 		if time.Now().Unix() >= int64(exp) {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"error":     "Token expired",
+				"error":     "token_expired",
 				"requestID": requestID,
 			})
 			return
@@ -97,11 +106,19 @@ func NewJWTMiddleware(d *gorm.DB) gin.HandlerFunc {
 
 		// In case someone logs in to delete their account and then logs in again (that's so fucking stupid I know),
 		// we'll reject the request
-		var found bool
-		err = d.Model(model.User{}).Where("id = ?", userID).Select("count(*) > 0").Find(&found).Error
-		if err != nil && err != gorm.ErrRecordNotFound {
+		var user model.User
+		err = d.Where("id = ?", userID).First(&user).Error
+		if err != nil {
+			if err == gorm.ErrRecordNotFound {
+				c.AbortWithStatusJSON(http.StatusNotFound, gin.H{
+					"error":     "user_not_found",
+					"requestID": requestID,
+				})
+				return
+			}
+
 			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
-				"error":     "Internal server error",
+				"error":     "internal_server_error",
 				"requestID": requestID,
 			})
 
@@ -109,11 +126,19 @@ func NewJWTMiddleware(d *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		if !found {
-			c.AbortWithStatusJSON(http.StatusNotFound, gin.H{
-				"error":     "User not found",
+		if !user.Verified {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error":     "account_not_verified",
 				"requestID": requestID,
 			})
+
+			sslEnabled, err := strconv.ParseBool("HOST_SSL_ENABLED")
+			if err != nil {
+				sslEnabled = false
+			}
+
+			// 30 days to verify or account deleted
+			c.SetCookie("needs_verification", "1", 86400, "/", "", sslEnabled, false)
 			return
 		}
 

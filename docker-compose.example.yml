@@ -1,16 +1,22 @@
 services:
   backend:
+    container_name: vidsh_backend
     restart: always
-    # If you want to use hwaccel flags you have to give the container access to your GPU
+    # If you want to use hwaccel flags you have to give the container access to your GPU. Uncomment one of the blocks to enable
+
+    # === Nvidia ===
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    # === Intel & AMD ===
     # deploy:
     #   resources:
     #     reservations:
-    # === Nvidia ===
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
-    # === Intel & AMD ===
     #       devices:
     #         - /dev/dri:/dev/dri
     environment:
@@ -24,7 +30,6 @@ services:
     # Make sure the place is accessible and safe from other programs
     # The default value (.) points to the folder where the docker-compose file is
     - HOST_DATABASE_PATH=./database.db
-    - FFMPEG_HWACCEL_FLAGS=
     - FFMPEG_MAX_JOBS=32
     - FFMPEG_WORKERS=4
     # This should be a long, random string. If you don't provide one it'll be generated
@@ -41,7 +46,6 @@ services:
     - AWS_SECRET_ACCESS_KEY=
     - AWS_BUCKET=
     - AWS_REGION=
-    - AWS_CLOUDFRONT_URL=
     # Recommended to setup as its free and defends your FFmpeg endpoint from bots
     - CLOUDFLARE_TURNSTILE_ENABLED=false
     - CLOUDFLARE_TURNSTILE_SECRET_TOKEN=

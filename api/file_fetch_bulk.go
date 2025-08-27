@@ -22,7 +22,7 @@ func (a *API) FileFetchBulk(c *gin.Context) {
 	pageStr := c.DefaultQuery("page", "0")
 	page, err := strconv.Atoi(pageStr)
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+		c.JSON(http.StatusBadRequest, gin.H{
 			"error":     "Page is not a valid integer",
 			"requestID": requestID,
 		})
@@ -30,7 +30,7 @@ func (a *API) FileFetchBulk(c *gin.Context) {
 	}
 
 	if page < 0 {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+		c.JSON(http.StatusBadRequest, gin.H{
 			"error":     "Page can't be negative",
 			"requestID": requestID,
 		})
@@ -40,7 +40,7 @@ func (a *API) FileFetchBulk(c *gin.Context) {
 	limitStr := c.DefaultQuery("limit", "10")
 	limit, err := strconv.Atoi(limitStr)
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+		c.JSON(http.StatusBadRequest, gin.H{
 			"error":     "Limit is not a valid integer",
 			"requestID": requestID,
 		})
@@ -48,7 +48,7 @@ func (a *API) FileFetchBulk(c *gin.Context) {
 	}
 
 	if limit <= 0 {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+		c.JSON(http.StatusBadRequest, gin.H{
 			"error":     "Limit must be bigger than 0",
 			"requestID": requestID,
 		})
@@ -56,7 +56,7 @@ func (a *API) FileFetchBulk(c *gin.Context) {
 	}
 
 	if limit > 100 {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+		c.JSON(http.StatusBadRequest, gin.H{
 			"error":     "Limit can't be bigger than 100",
 			"requestID": requestID,
 		})
@@ -65,7 +65,7 @@ func (a *API) FileFetchBulk(c *gin.Context) {
 
 	sort := strings.ToLower(c.DefaultQuery("sort", "newest"))
 	if !slices.Contains(validSortOpts, sort) {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+		c.JSON(http.StatusBadRequest, gin.H{
 			"error":     "Invalid sorting option",
 			"requestID": requestID,
 		})
@@ -94,7 +94,6 @@ func (a *API) FileFetchBulk(c *gin.Context) {
 
 	err = a.DB.
 		Where("user_id = ?", userID).
-		Not("original_name LIKE ?", "%.webp").
 		Order(order).
 		Offset(offset).
 		Limit(limit).
@@ -102,19 +101,25 @@ func (a *API) FileFetchBulk(c *gin.Context) {
 		Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
-			c.AbortWithStatusJSON(http.StatusNotFound, gin.H{
+			c.JSON(http.StatusNotFound, gin.H{
 				"error":     "No files found",
 				"requestID": requestID,
 			})
 			return
 		}
 
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":     "Internal server error",
 			"requestID": requestID,
 		})
 		zap.L().Error("Failed to lookup user files", zap.Error(err))
 		return
+	}
+
+	for i, file := range entries {
+		version := strconv.Itoa(file.Version)
+		entries[i].FileKey = file.FileKey + "?v=" + version
+		entries[i].ThumbKey = file.ThumbKey + "?v=" + version
 	}
 
 	c.JSON(http.StatusOK, entries)

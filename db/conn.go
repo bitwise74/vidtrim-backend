@@ -1,3 +1,4 @@
+// Package db contains things related to SQlite
 package db
 
 import (
@@ -14,7 +15,7 @@ func New() (*gorm.DB, error) {
 		return nil, fmt.Errorf("failed to initialize SQLite database, %w", err)
 	}
 
-	err = db.AutoMigrate(model.User{}, model.File{}, model.Stats{})
+	err = db.AutoMigrate(model.User{}, model.File{}, model.Stats{}, model.VerificationToken{}, model.ResendRequest{}, model.Migration{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to automigrate tables, %w", err)
 	}

@@ -5,13 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
-	"github.com/spf13/viper"
 )
 
 type S3Client struct {
@@ -22,8 +22,8 @@ type S3Client struct {
 func NewS3() (*S3Client, error) {
 	cfg, err := config.LoadDefaultConfig(context.TODO(),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
-			viper.GetString("aws.access_key_id"),
-			viper.GetString("aws.secret_access_key"),
+			os.Getenv("ACCESS_KEY_ID"),
+			os.Getenv("SECRET_ACCESS_KEY"),
 			"",
 		)),
 	)
@@ -31,10 +31,10 @@ func NewS3() (*S3Client, error) {
 		return nil, err
 	}
 
-	bucket := aws.String(viper.GetString("aws.bucket"))
+	bucket := aws.String(os.Getenv("BUCKET"))
 
 	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
-		o.Region = viper.GetString("aws.region")
+		o.Region = os.Getenv("REGION")
 	})
 
 	_, err = client.HeadBucket(context.TODO(), &s3.HeadBucketInput{
@@ -45,7 +45,7 @@ func NewS3() (*S3Client, error) {
 
 		if errors.As(err, &apiErr) {
 			if apiErr.ErrorCode() == "NotFound" {
-				return nil, fmt.Errorf("bucket '%s' does not exist", viper.GetString("s3.bucket"))
+				return nil, fmt.Errorf("bucket '%s' does not exist", os.Getenv("BUCKET"))
 			}
 		}
 

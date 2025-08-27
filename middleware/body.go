@@ -11,7 +11,7 @@ func BodySizeLimiter(maxBytes int64) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Fast reject for legit requests
 		if c.Request.ContentLength > maxBytes {
-			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+			c.JSON(http.StatusBadRequest, gin.H{
 				"error": "Request body size exceeds limit",
 			})
 			return
@@ -22,7 +22,7 @@ func BodySizeLimiter(maxBytes int64) gin.HandlerFunc {
 
 		if c.Errors.Last() != nil {
 			if strings.Contains(c.Errors.Last().Error(), "http: request body too large") {
-				c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{
+				c.JSON(http.StatusRequestEntityTooLarge, gin.H{
 					"error": "Request body size exceeds limit",
 				})
 			}

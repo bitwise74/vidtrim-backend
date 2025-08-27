@@ -10,25 +10,24 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
 
-	"github.com/spf13/viper"
 	"go.uber.org/zap"
 )
 
 type FFmpegJob struct {
-	ID         string
-	UserID     string
-	FilePath   string
-	Output     io.Writer
-	Opts       *validators.ProcessingOptions
-	Args       *[]string
-	Ctx        context.Context
-	CancelFunc context.CancelFunc
-	Done       chan error
+	ID       string
+	UserID   string
+	FilePath string
+	Output   io.Writer
+	Opts     *validators.ProcessingOptions
+	Args     *[]string
+	Ctx      context.Context
+	Done     chan error
 }
 
 type FFMpegJobStats struct {
@@ -39,28 +38,33 @@ type FFMpegJobStats struct {
 type JobQueue struct {
 	jobs    chan *FFmpegJob
 	threads int
+	workers int64
 }
 
 // NewJobQueue initializes a new job queue that limits the
 // max amount of jobs that can be queued at once
 func NewJobQueue() *JobQueue {
+	maxJobs, _ := strconv.ParseInt(os.Getenv("FFMPEG_MAX_JOBS"), 10, 32)
+	workers, _ := strconv.ParseInt(os.Getenv("FFMPEG_WORKERS"), 10, 32)
+
 	return &JobQueue{
-		jobs:    make(chan *FFmpegJob, viper.GetInt("ffmpeg.max_jobs")),
-		threads: getThreadsPerJob(viper.GetInt("ffmpeg.workers")),
+		jobs:    make(chan *FFmpegJob, maxJobs),
+		threads: getThreadsPerJob(workers),
+		workers: workers,
 	}
 }
 
 // Figures out the amount of threads to use per ffmpeg job
-func getThreadsPerJob(c int) int {
+func getThreadsPerJob(c int64) int {
 	totalCores := runtime.NumCPU()
 	threads := max(int(math.Floor(float64(totalCores)/float64(c))), 1)
 
-	zap.L().Debug("Figured out amount of threads to use", zap.Int("t", threads))
+	zap.L().Debug("Threads per ffmpeg job specified", zap.Int("threads", threads), zap.Int64("workers", c))
 	return threads
 }
 
 func (q *JobQueue) StartWorkerPool() {
-	for range viper.GetInt("ffmpeg.workers") {
+	for range q.workers {
 		go q.worker()
 	}
 }
@@ -80,48 +84,51 @@ func (q *JobQueue) Enqueue(job *FFmpegJob) error {
 	}
 }
 
-func (q *JobQueue) MakeFFmpegFlags(opts *validators.ProcessingOptions, path string) ([]string, float64, error) {
-	args := []string{
-		"-i", path,
+func (q *JobQueue) MakeFFmpegFlags(opts *validators.ProcessingOptions, p string) ([]string, float64, error) {
+	args := []string{}
+
+	useGPU, _ := strconv.ParseBool(os.Getenv("FFMPEG_USE_GPU"))
+	hwaccel := os.Getenv("FFMPEG_HWACCEL")
+	encoder := os.Getenv("FFMPEG_ENCODER")
+
+	if encoder == "" {
+		encoder = "libx264"
 	}
 
 	var duration float64
+	var err error
 
-	if opts.TrimEnd > 1 && opts.TrimStart != -1 {
-		args = append(args,
-			"-ss", util.FloatToTimestamp(opts.TrimStart),
-			"-to", util.FloatToTimestamp(opts.TrimEnd),
-		)
+	if useGPU && hwaccel != "" {
+		args = append(args, "-hwaccel", hwaccel)
+	}
 
+	args = append(args, "-i", p)
+
+	if opts.TrimStart > 0 {
+		args = append(args, "-ss", util.FloatToTimestamp(opts.TrimStart))
+	}
+
+	if opts.TrimEnd > 0 && opts.TrimStart >= 0 {
+		args = append(args, "-to", util.FloatToTimestamp(opts.TrimEnd))
 		duration = float64(opts.TrimEnd - opts.TrimStart)
 	} else {
-		var err error
-		duration, err = GetDuration(path)
+		duration, err = GetDuration(p)
 		if err != nil {
-			return []string{}, 0, fmt.Errorf("failed to run ffprobe to determine video duration: %w", err)
+			return nil, 0, fmt.Errorf("failed to run ffprobe to determine video duration: %w", err)
 		}
 	}
 
-	args = append(args,
-		"-c:v", "libx264",
-		"-threads", strconv.Itoa(q.threads),
-	)
+	args = append(args, "-c:v", encoder, "-threads", strconv.Itoa(q.threads))
 
 	if opts.TargetSize > 0 {
 		totalKilobits := opts.TargetSize * 8388.608
-		totalBitrateKbps := totalKilobits / float64(duration)
-
+		totalBitrateKbps := totalKilobits / duration
 		videoBitrateKbps := totalBitrateKbps - 128
-
 		if videoBitrateKbps <= 0 {
 			videoBitrateKbps = 5
 		}
-
 		videoBitrateStr := fmt.Sprintf("%.0fK", videoBitrateKbps)
-
-		bufSizeKbps := int(videoBitrateKbps * 2)
-		bufSizeStr := fmt.Sprintf("%dk", bufSizeKbps)
-
+		bufSizeStr := fmt.Sprintf("%dk", int(videoBitrateKbps*2))
 		args = append(args,
 			"-b:v", videoBitrateStr,
 			"-maxrate", videoBitrateStr,
@@ -129,25 +136,36 @@ func (q *JobQueue) MakeFFmpegFlags(opts *validators.ProcessingOptions, path stri
 		)
 	}
 
-	if opts.ProcessingSpeed != "" {
-		args = append(args,
-			"-preset", opts.ProcessingSpeed,
-		)
+	preset := opts.ProcessingSpeed
+	if strings.Contains(encoder, "nvenc") {
+		switch preset {
+		case "ultrafast", "superfast":
+			preset = "fast"
+		case "veryfast":
+			preset = "medium"
+		case "faster":
+			preset = "hp"
+		default:
+			preset = "fast"
+		}
+	} else if preset == "" {
+		preset = "fast"
 	}
+	args = append(args, "-preset", preset)
 
 	args = append(args,
-		"-movflags", "frag_keyframe+empty_moov",
-		"-movflags", "+faststart",
-		"-c:a", "aac",
-		"-b:a", "128k",
+		"-c:a", "copy",
+		"-movflags", "+frag_keyframe+empty_moov+faststart",
 		"-loglevel", "error",
 	)
 
 	args = append(args,
 		"-f", "mp4",
-		"pipe:1", "-progress",
-		"pipe:2", "-nostats",
+		"pipe:1",
+		"-progress", "pipe:2",
+		"-nostats",
 	)
+
 	return args, duration, nil
 }
 
@@ -170,7 +188,7 @@ func (q *JobQueue) runFFmpegJob(job *FFmpegJob) error {
 		job.Args = &args
 	}
 
-	cmd := exec.Command("ffmpeg", *job.Args...)
+	cmd := exec.CommandContext(job.Ctx, "ffmpeg", *job.Args...)
 
 	zap.L().Debug("Running FFmpeg command", zap.String("cmd", cmd.String()))
 

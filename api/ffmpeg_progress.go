@@ -14,7 +14,7 @@ func (a *API) FFmpegProgress(c *gin.Context) {
 	userID := c.MustGet("userID").(string)
 
 	if _, ok := service.ProgressMap.Load(userID); !ok {
-		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{
+		c.JSON(http.StatusNotFound, gin.H{
 			"error":     "No running jobs found",
 			"requestID": requestID,
 		})

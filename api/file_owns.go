@@ -15,7 +15,7 @@ func (a *API) FileOwns(c *gin.Context) {
 
 	fileID := c.Param("id")
 	if fileID == "" {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+		c.JSON(http.StatusBadRequest, gin.H{
 			"error":     "No file ID provided",
 			"requestID": requestID,
 		})
@@ -31,14 +31,14 @@ func (a *API) FileOwns(c *gin.Context) {
 		Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
-			c.AbortWithStatusJSON(http.StatusNotFound, gin.H{
+			c.JSON(http.StatusNotFound, gin.H{
 				"error":     "File not found",
 				"requestID": requestID,
 			})
 			return
 		}
 
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":     "Internal server error",
 			"requestID": requestID,
 		})
