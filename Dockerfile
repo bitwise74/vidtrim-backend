@@ -10,11 +10,13 @@ RUN go mod download
 COPY . ./
 RUN go build -ldflags="-s -w" -o video-api .
 
-FROM alpine:3.20
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
 WORKDIR /app
 
-RUN apk add --no-cache ffmpeg
+RUN apt-get update && \
+    apt-get install -y ffmpeg ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/video-api .
 
