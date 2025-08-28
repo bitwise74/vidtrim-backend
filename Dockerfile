@@ -1,22 +1,15 @@
-FROM golang:1.24.4-alpine AS builder
+FROM nvidia/cuda:12.2.0-runtime-ubuntu22.04
 
 WORKDIR /app
 
-RUN apk add --no-cache gcc g++ musl-dev
+RUN apt-get update && \
+    apt-get install -y gcc g++ ffmpeg ca-certificates git make && \
+    rm -rf /var/lib/apt/lists/*
 
-COPY go.mod go.sum ./
+COPY . .
+
 RUN go mod download
-
-COPY . ./
-RUN go build -ldflags="-s -w" -o video-api .
-
-FROM alpine:3.20
-
-WORKDIR /app
-
-RUN apk add --no-cache ffmpeg
-
-COPY --from=builder /app/video-api .
+RUN go build -o video-api .
 
 EXPOSE 8080
 

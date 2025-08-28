@@ -64,8 +64,7 @@ func (a *API) FFmpegProcess(c *gin.Context) {
 		})
 		return
 	}
-
-	f.Seek(0, 0)
+	defer f.Close()
 
 	tempFile, err := os.CreateTemp("", "upload-*.mp4")
 	if err != nil {
@@ -77,6 +76,7 @@ func (a *API) FFmpegProcess(c *gin.Context) {
 		zap.L().Error("Failed to create temporary file", zap.Error(err))
 		return
 	}
+	defer tempFile.Close()
 	defer os.Remove(tempFile.Name())
 
 	_, err = io.Copy(tempFile, f)

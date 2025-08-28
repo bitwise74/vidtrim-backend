@@ -30,12 +30,13 @@ func NewUploader(j *JobQueue, s *a.S3Client) *Uploader {
 	}
 }
 
-// Do should be used with a file that's ready for upload and was checked. It creates a thumbnail for the video file and uploads both files. Providing an override value will instead update an existing file
+// Do should be used with a file that's ready for upload and was checked. It creates a thumbnail for the video file and uploads both files. Providing an override value will instead update an existing file. Files are deleted after upload
 func (u *Uploader) Do(p, name, userID string, override ...string) (*model.File, error) {
 	videoFile, err := os.Open(p)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open video file, %w", err)
 	}
+	defer os.Remove(p)
 	defer videoFile.Close()
 
 	videoStat, _ := videoFile.Stat()
@@ -49,6 +50,7 @@ func (u *Uploader) Do(p, name, userID string, override ...string) (*model.File, 
 	if err != nil {
 		return nil, fmt.Errorf("failed to open thumbnail file, %w", err)
 	}
+	defer os.Remove(thumbPath)
 	defer thumbFile.Close()
 
 	// Prepare things for background operations

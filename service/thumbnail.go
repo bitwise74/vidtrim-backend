@@ -22,7 +22,6 @@ func MakeThumbnail(input string, j *JobQueue, userID string) (p string, err erro
 		Progress: 0,
 		JobID:    jobID,
 	})
-	defer ProgressMap.Delete(userID)
 
 	done := make(chan error, 1)
 

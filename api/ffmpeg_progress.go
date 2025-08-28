@@ -27,7 +27,6 @@ func (a *API) FFmpegProgress(c *gin.Context) {
 
 	ticker := time.NewTicker(time.Millisecond * 200)
 	defer ticker.Stop()
-	defer service.ProgressMap.Delete(userID)
 
 	for range ticker.C {
 		val, ok := service.ProgressMap.Load(userID)

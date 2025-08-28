@@ -45,7 +45,7 @@ func NewS3() (*S3Client, error) {
 
 		if errors.As(err, &apiErr) {
 			if apiErr.ErrorCode() == "NotFound" {
-				return nil, fmt.Errorf("bucket '%s' does not exist", os.Getenv("BUCKET"))
+				return nil, fmt.Errorf("bucket '%s' does not exist", *bucket)
 			}
 		}
 

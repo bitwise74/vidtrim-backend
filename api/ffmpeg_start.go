@@ -4,7 +4,6 @@ import (
 	"bitwise74/video-api/service"
 	"bitwise74/video-api/util"
 	"net/http"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -29,12 +28,6 @@ func (a *API) FFMpegStart(c *gin.Context) {
 	})
 
 	zap.L().Debug("Started a new FFmpeg job", zap.String("userID", userID), zap.String("jobID", jobID))
-
-	// Delete the job after a minute unless stopped early
-	go func() {
-		time.Sleep(time.Minute * 1)
-		service.ProgressMap.Delete(userID)
-	}()
 
 	c.JSON(http.StatusOK, gin.H{
 		"jobID": jobID,

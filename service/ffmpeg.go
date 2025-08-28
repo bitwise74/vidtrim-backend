@@ -170,6 +170,7 @@ func (q *JobQueue) MakeFFmpegFlags(opts *validators.ProcessingOptions, p string)
 }
 
 func (q *JobQueue) runFFmpegJob(job *FFmpegJob) error {
+	defer ProgressMap.Delete(job.UserID)
 	var duration float64
 	var err error
 
@@ -193,6 +194,8 @@ func (q *JobQueue) runFFmpegJob(job *FFmpegJob) error {
 	zap.L().Debug("Running FFmpeg command", zap.String("cmd", cmd.String()))
 
 	stderrPipe, _ := cmd.StderrPipe()
+	defer stderrPipe.Close()
+
 	stderrBuf := &bytes.Buffer{}
 
 	go func() {
@@ -231,6 +234,7 @@ func (q *JobQueue) runFFmpegJob(job *FFmpegJob) error {
 	if err != nil {
 		return fmt.Errorf("failed to create stdout pipe: %v", err)
 	}
+	defer stdout.Close()
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start ffmpeg, %w", err)

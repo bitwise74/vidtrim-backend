@@ -135,10 +135,12 @@ func (a *API) UserRegister(c *gin.Context) {
 	}
 
 	maxStorage, _ := strconv.ParseInt(os.Getenv("STORAGE_MAX_USAGE"), 10, 64)
+	expiry := time.Now().Add(time.Hour * 24 * 7)
 
 	if err := a.DB.Create(&model.User{
 		ID:           userID,
 		Email:        data.Email,
+		ExpiresAt:    &expiry,
 		PasswordHash: hash,
 		Stats: model.Stats{
 			UserID:     userID,
