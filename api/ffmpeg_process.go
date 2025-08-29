@@ -23,6 +23,14 @@ func (a *API) FFmpegProcess(c *gin.Context) {
 	userID := c.MustGet("userID").(string)
 	jobID := c.Query("jobID")
 
+	if jobID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":     "No job ID provided",
+			"requestID": requestID,
+		})
+		return
+	}
+
 	var opts validators.ProcessingOptions
 	if err := c.MustBindWith(&opts, binding.FormMultipart); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -96,7 +104,7 @@ func (a *API) FFmpegProcess(c *gin.Context) {
 		done := make(chan error, 1)
 		// Enqueue can only error if the queue is full
 		err = a.JobQueue.Enqueue(&service.FFmpegJob{
-			ID:       jobID,
+			ID:       util.RandStr(5),
 			UserID:   userID,
 			FilePath: tempFile.Name(),
 			Output:   c.Writer,
@@ -157,7 +165,7 @@ func (a *API) FFmpegProcess(c *gin.Context) {
 	done := make(chan error, 1)
 	// Enqueue can only error if the queue is full
 	err = a.JobQueue.Enqueue(&service.FFmpegJob{
-		ID:       jobID,
+		ID:       util.RandStr(5),
 		UserID:   userID,
 		FilePath: tempFile.Name(),
 		Output:   tempProcessed,

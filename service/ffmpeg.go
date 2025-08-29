@@ -47,8 +47,10 @@ func NewJobQueue() *JobQueue {
 	maxJobs, _ := strconv.ParseInt(os.Getenv("FFMPEG_MAX_JOBS"), 10, 32)
 	workers, _ := strconv.ParseInt(os.Getenv("FFMPEG_WORKERS"), 10, 32)
 
+	zap.L().Debug("Initializing job queue", zap.Int64("max_jobs", maxJobs))
+
 	return &JobQueue{
-		jobs:    make(chan *FFmpegJob, maxJobs),
+		jobs:    make(chan *FFmpegJob),
 		workers: workers,
 	}
 }
@@ -87,15 +89,6 @@ func (q *JobQueue) worker() {
 }
 
 func (q *JobQueue) Enqueue(job *FFmpegJob) error {
-	if _, ok := ProgressMap.Load(job.UserID); ok {
-		return errors.New("job_already_running")
-	}
-
-	ProgressMap.Store(job.UserID, &FFMpegJobStats{
-		Progress: 0.0,
-		JobID:    job.ID,
-	})
-
 	select {
 	case q.jobs <- job:
 		q.running.Add(1)
