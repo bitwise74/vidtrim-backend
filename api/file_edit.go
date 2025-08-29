@@ -97,15 +97,6 @@ func (a *API) FileEdit(c *gin.Context) {
 	originalSize := file.Size
 
 	if data.ProcessingOptions != nil {
-		jobEnt, ok := service.ProgressMap.Load(userID)
-		if !ok {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error":     "No job with this ID found",
-				"requestID": requestID,
-			})
-			return
-		}
-
 		if code, err := validators.ProcessingOptsValidator(data.ProcessingOptions, float64(file.Size)); err != nil {
 			c.JSON(code, gin.H{
 				"error":     err.Error(),
@@ -113,8 +104,6 @@ func (a *API) FileEdit(c *gin.Context) {
 			})
 			return
 		}
-
-		job := jobEnt.(service.FFMpegJobStats)
 
 		// Download the video to process
 		temp, err := os.CreateTemp("", "process-*.mp4")
@@ -196,10 +185,11 @@ func (a *API) FileEdit(c *gin.Context) {
 		defer os.Remove(tempProcessed.Name())
 
 		err = a.JobQueue.Enqueue(&service.FFmpegJob{
-			ID:       job.JobID,
+			ID:       util.RandStr(5),
 			UserID:   userID,
 			FilePath: temp.Name(),
 			Opts:     data.ProcessingOptions,
+			UseGPU:   true,
 			Output:   tempProcessed,
 			Ctx:      ctx,
 			Done:     done,
@@ -226,7 +216,7 @@ func (a *API) FileEdit(c *gin.Context) {
 		newFile, err := a.Uploader.Do(tempProcessed.Name(), file.OriginalName, userID, keyNoExt)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":     "internal_server_error",
+				"error":     "Internal server error",
 				"requestID": requestID,
 			})
 

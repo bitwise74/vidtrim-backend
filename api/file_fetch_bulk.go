@@ -23,7 +23,7 @@ func (a *API) FileFetchBulk(c *gin.Context) {
 	page, err := strconv.Atoi(pageStr)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error":     "Page is not a valid integer",
+			"error":     "Page must be a number",
 			"requestID": requestID,
 		})
 		return
@@ -41,7 +41,7 @@ func (a *API) FileFetchBulk(c *gin.Context) {
 	limit, err := strconv.Atoi(limitStr)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error":     "Limit is not a valid integer",
+			"error":     "Limit must be a number",
 			"requestID": requestID,
 		})
 		return
@@ -49,15 +49,15 @@ func (a *API) FileFetchBulk(c *gin.Context) {
 
 	if limit <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error":     "Limit must be bigger than 0",
+			"error":     "Limit must be greater than 0",
 			"requestID": requestID,
 		})
 		return
 	}
 
-	if limit > 100 {
+	if limit > 250 {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error":     "Limit can't be bigger than 100",
+			"error":     "Limit must be smaller than 250",
 			"requestID": requestID,
 		})
 		return
@@ -102,7 +102,7 @@ func (a *API) FileFetchBulk(c *gin.Context) {
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			c.JSON(http.StatusNotFound, gin.H{
-				"error":     "No files found",
+				"error":     "No results",
 				"requestID": requestID,
 			})
 			return

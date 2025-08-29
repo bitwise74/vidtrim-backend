@@ -128,7 +128,7 @@ func NewRouter() (*API, error) {
 	ffmpeg := main.Group("/ffmpeg", jwt)
 	{
 		// GET /api/ffmpeg/start	-> Starts an FFmpeg job
-		ffmpeg.GET("/start", a.FFMpegStart)
+		// ffmpeg.GET("/start", a.FFMpegStart)
 
 		// GET /api/ffmpeg/progress	-> Returns the progress of a job
 		ffmpeg.GET("/progress", a.FFmpegProgress)

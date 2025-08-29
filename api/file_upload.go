@@ -2,15 +2,15 @@ package api
 
 import (
 	"bitwise74/video-api/model"
+	"bitwise74/video-api/service"
 	"bitwise74/video-api/util"
 	"bitwise74/video-api/validators"
-	"bytes"
 	"context"
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -74,34 +74,95 @@ func (a *API) FileUpload(c *gin.Context) {
 		return
 	}
 
-	rand := util.RandStr(10)
-	videoPath := path.Join(os.TempDir(), rand+".mp4")
-
-	cmd := exec.CommandContext(context.Background(), "ffmpeg",
-		"-y",
-		"-i", temp.Name(),
-		"-movflags", "+faststart",
-		"-f", "mp4",
-		videoPath,
-	)
-
-	var stdErr bytes.Buffer
-	cmd.Stderr = &stdErr
-
-	if err := cmd.Run(); err != nil {
+	tempProcessed, err := os.CreateTemp("", "processed-*.mp4")
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":     "internal_server_error",
+			"error":     "Internal server error",
 			"requestID": requestID,
 		})
 
-		zap.L().Error("Failed to run ffmpeg", zap.Error(err), zap.String("stderr", stdErr.String()))
+		zap.L().Error("Failed to create temporary processed file", zap.String("requestID", requestID), zap.Error(err))
+		return
+	}
+	defer tempProcessed.Close()
+	defer os.Remove(tempProcessed.Name())
+
+	var ffmpegOpts []string
+	var useGPU bool
+
+	if path.Ext(fh.Filename) == ".mkv" {
+		ffmpegOpts = append(ffmpegOpts,
+			"-y",
+			"-i", temp.Name(),
+			"-movflags", "+faststart",
+			"-f", "mp4",
+			tempProcessed.Name(),
+		)
+		useGPU = true
+	} else {
+		ffmpegOpts = append(ffmpegOpts,
+			"-y",
+			"-i", temp.Name(),
+			"-c:a", "copy",
+			"-c:v", "copy",
+			"-movflags", "+faststart",
+			"-f", "mp4",
+			tempProcessed.Name(),
+		)
+	}
+
+	done := make(chan error, 1)
+
+	ctxReq := c.Request.Context()
+	ctxTimeout, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	ctx, cancelMerged := util.MergeContexts(ctxReq, ctxTimeout)
+	defer cancelMerged()
+
+	err = a.JobQueue.Enqueue(&service.FFmpegJob{
+		ID:       util.RandStr(5),
+		UserID:   userID,
+		FilePath: temp.Name(),
+		Output:   tempProcessed,
+		UseGPU:   useGPU,
+		Args:     &ffmpegOpts,
+		Ctx:      ctx,
+		Done:     done,
+	})
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error":     "Job queue is full. Please wait a moment before trying again",
+			"requestID": requestID,
+		})
+
+		zap.L().Warn("FFmpeg job queue is full")
 		return
 	}
 
-	fileEnt, err := a.Uploader.Do(videoPath, fh.Filename, userID)
+	select {
+	case err := <-done:
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":     "Internal server error",
+				"requestID": requestID,
+			})
+			return
+		}
+	case <-ctx.Done():
+		c.JSON(http.StatusRequestTimeout, gin.H{
+			"error":     "Request was cancelled or timed out",
+			"requestID": requestID,
+		})
+
+		zap.L().Warn("Request context done before FFmpeg finished", zap.Error(ctx.Err()))
+		return
+	}
+
+	fileEnt, err := a.Uploader.Do(tempProcessed.Name(), fh.Filename, userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":     "internal_server_error",
+			"error":     "Internal server error",
 			"requestID": requestID,
 		})
 

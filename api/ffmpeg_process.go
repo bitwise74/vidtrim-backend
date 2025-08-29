@@ -23,14 +23,6 @@ func (a *API) FFmpegProcess(c *gin.Context) {
 	userID := c.MustGet("userID").(string)
 	jobID := c.Query("jobID")
 
-	if _, ok := service.ProgressMap.Load(userID); !ok {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":     "Invalid job ID",
-			"requestID": requestID,
-		})
-		return
-	}
-
 	var opts validators.ProcessingOptions
 	if err := c.MustBindWith(&opts, binding.FormMultipart); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -55,7 +47,7 @@ func (a *API) FFmpegProcess(c *gin.Context) {
 		if code == http.StatusInternalServerError {
 			zap.L().Error("Failed to validate file", zap.Error(err))
 
-			err = errors.New("internal server error")
+			err = errors.New("Internal server error")
 		}
 
 		c.JSON(code, gin.H{
@@ -109,6 +101,7 @@ func (a *API) FFmpegProcess(c *gin.Context) {
 			FilePath: tempFile.Name(),
 			Output:   c.Writer,
 			Opts:     &opts,
+			UseGPU:   true,
 			Ctx:      ctx,
 			Done:     done,
 		})
@@ -129,8 +122,6 @@ func (a *API) FFmpegProcess(c *gin.Context) {
 					"error":     "Internal server error",
 					"requestID": requestID,
 				})
-
-				zap.L().Error("FFmpeg job failed", zap.Error(err))
 				return
 			}
 		case <-ctx.Done():
@@ -142,15 +133,13 @@ func (a *API) FFmpegProcess(c *gin.Context) {
 			zap.L().Warn("Request context done before FFmpeg finished", zap.Error(ctx.Err()))
 			return
 		}
-
-		close(done)
 		return
 	}
 
 	tempProcessed, err := os.CreateTemp("", "processed-*.mp4")
 	if err != nil {
 		c.JSON(http.StatusRequestTimeout, gin.H{
-			"error":     "internal_server_error",
+			"error":     "Internal server error",
 			"requestID": requestID,
 		})
 
@@ -173,6 +162,7 @@ func (a *API) FFmpegProcess(c *gin.Context) {
 		FilePath: tempFile.Name(),
 		Output:   tempProcessed,
 		Opts:     &opts,
+		UseGPU:   true,
 		Ctx:      ctx,
 		Done:     done,
 	})
@@ -193,8 +183,6 @@ func (a *API) FFmpegProcess(c *gin.Context) {
 				"error":     "Internal server error",
 				"requestID": requestID,
 			})
-
-			zap.L().Error("FFmpeg job failed", zap.Error(err))
 			return
 		}
 	case <-ctx.Done():
@@ -207,12 +195,10 @@ func (a *API) FFmpegProcess(c *gin.Context) {
 		return
 	}
 
-	close(done)
-
 	fileEnt, err := a.Uploader.Do(tempProcessed.Name(), opts.File.Filename, userID)
 	if err != nil {
 		c.JSON(http.StatusRequestTimeout, gin.H{
-			"error":     "internal_server_error",
+			"error":     "Internal server error",
 			"requestID": requestID,
 		})
 

@@ -72,7 +72,7 @@ func (a *API) UserLogin(c *gin.Context) {
 
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{
-			"error":     "credentials_invalid",
+			"error":     "Invalid credentials",
 			"requestID": requestID,
 		})
 		return

@@ -9,12 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"os/exec"
-	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"go.uber.org/zap"
 )
@@ -24,6 +23,7 @@ type FFmpegJob struct {
 	UserID   string
 	FilePath string
 	Output   io.Writer
+	UseGPU   bool
 	Opts     *validators.ProcessingOptions
 	Args     *[]string
 	Ctx      context.Context
@@ -37,7 +37,7 @@ type FFMpegJobStats struct {
 
 type JobQueue struct {
 	jobs    chan *FFmpegJob
-	threads int
+	running atomic.Int32
 	workers int64
 }
 
@@ -49,18 +49,8 @@ func NewJobQueue() *JobQueue {
 
 	return &JobQueue{
 		jobs:    make(chan *FFmpegJob, maxJobs),
-		threads: getThreadsPerJob(workers),
 		workers: workers,
 	}
-}
-
-// Figures out the amount of threads to use per ffmpeg job
-func getThreadsPerJob(c int64) int {
-	totalCores := runtime.NumCPU()
-	threads := max(int(math.Floor(float64(totalCores)/float64(c))), 1)
-
-	zap.L().Debug("Threads per ffmpeg job specified", zap.Int("threads", threads), zap.Int64("workers", c))
-	return threads
 }
 
 func (q *JobQueue) StartWorkerPool() {
@@ -71,13 +61,45 @@ func (q *JobQueue) StartWorkerPool() {
 
 func (q *JobQueue) worker() {
 	for job := range q.jobs {
-		job.Done <- q.runFFmpegJob(job)
+		err := q.runFFmpegJob(job)
+
+		job.Done <- err
+		close(job.Done)
+
+		q.running.Add(-1)
+
+		ProgressMap.Delete(job.UserID)
+
+		if err != nil {
+			zap.L().Error("FFmpeg job finished with an error",
+				zap.String("user_id", job.UserID),
+				zap.String("job_id", job.ID),
+				zap.Error(err))
+		} else {
+			zap.L().Debug("FFmpeg job finished successfully")
+		}
+
+		ProgressMap.Range(func(key, value any) bool {
+			fmt.Println(key, value)
+			return true
+		})
 	}
 }
 
 func (q *JobQueue) Enqueue(job *FFmpegJob) error {
+	if _, ok := ProgressMap.Load(job.UserID); ok {
+		return errors.New("job_already_running")
+	}
+
+	ProgressMap.Store(job.UserID, &FFMpegJobStats{
+		Progress: 0.0,
+		JobID:    job.ID,
+	})
+
 	select {
 	case q.jobs <- job:
+		q.running.Add(1)
+		zap.L().Debug("New ffmpeg job enqueued", zap.Int32("enqueued", q.running.Load()), zap.String("user_id", job.UserID))
 		return nil
 	default:
 		return errors.New("job queue full")
@@ -87,10 +109,7 @@ func (q *JobQueue) Enqueue(job *FFmpegJob) error {
 func (q *JobQueue) MakeFFmpegFlags(opts *validators.ProcessingOptions, p string) ([]string, float64, error) {
 	args := []string{}
 
-	useGPU, _ := strconv.ParseBool(os.Getenv("FFMPEG_USE_GPU"))
-	hwaccel := os.Getenv("FFMPEG_HWACCEL")
 	encoder := os.Getenv("FFMPEG_ENCODER")
-
 	if encoder == "" {
 		encoder = "libx264"
 	}
@@ -98,19 +117,14 @@ func (q *JobQueue) MakeFFmpegFlags(opts *validators.ProcessingOptions, p string)
 	var duration float64
 	var err error
 
-	if useGPU && hwaccel != "" {
-		args = append(args, "-hwaccel", hwaccel)
-	}
-
 	args = append(args, "-i", p)
 
 	if opts.TrimStart > 0 {
 		args = append(args, "-ss", util.FloatToTimestamp(opts.TrimStart))
 	}
-
 	if opts.TrimEnd > 0 && opts.TrimStart >= 0 {
 		args = append(args, "-to", util.FloatToTimestamp(opts.TrimEnd))
-		duration = float64(opts.TrimEnd - opts.TrimStart)
+		duration = opts.TrimEnd - opts.TrimStart
 	} else {
 		duration, err = GetDuration(p)
 		if err != nil {
@@ -118,9 +132,18 @@ func (q *JobQueue) MakeFFmpegFlags(opts *validators.ProcessingOptions, p string)
 		}
 	}
 
-	args = append(args, "-c:v", encoder, "-threads", strconv.Itoa(q.threads))
+	args = append(args, "-c:v", encoder)
 
-	if opts.TargetSize > 0 {
+	if opts.LosslessExport {
+		switch encoder {
+		case "libx264":
+			args = append(args, "preset", "slow", "-crf", "18", "-pix_fmt", "yuv420p")
+		case "h264_nvenc", "hevc_nvenc":
+			args = append(args, "-preset", "p7", "-rc", "vbr", "-cq", "19", "-b:v", "0")
+		default:
+			args = append(args, "-crf", "10")
+		}
+	} else if opts.TargetSize > 0 {
 		totalKilobits := opts.TargetSize * 8388.608
 		totalBitrateKbps := totalKilobits / duration
 		videoBitrateKbps := totalBitrateKbps - 128
@@ -135,23 +158,6 @@ func (q *JobQueue) MakeFFmpegFlags(opts *validators.ProcessingOptions, p string)
 			"-bufsize", bufSizeStr,
 		)
 	}
-
-	preset := opts.ProcessingSpeed
-	if strings.Contains(encoder, "nvenc") {
-		switch preset {
-		case "ultrafast", "superfast":
-			preset = "fast"
-		case "veryfast":
-			preset = "medium"
-		case "faster":
-			preset = "hp"
-		default:
-			preset = "fast"
-		}
-	} else if preset == "" {
-		preset = "fast"
-	}
-	args = append(args, "-preset", preset)
 
 	args = append(args,
 		"-c:a", "copy",
@@ -169,8 +175,24 @@ func (q *JobQueue) MakeFFmpegFlags(opts *validators.ProcessingOptions, p string)
 	return args, duration, nil
 }
 
+// The encoder is always appended
+func addHWAccelFlags(args []string) []string {
+	useGPU, _ := strconv.ParseBool(os.Getenv("FFMPEG_USE_GPU"))
+	hwaccel := os.Getenv("FFMPEG_HWACCEL")
+
+	if useGPU && hwaccel != "" {
+		for i, arg := range args {
+			if arg == "-i" && i > 0 {
+				args = append(args[:i], append([]string{"-hwaccel", hwaccel}, args[i:]...)...)
+				break
+			}
+		}
+	}
+
+	return args
+}
+
 func (q *JobQueue) runFFmpegJob(job *FFmpegJob) error {
-	defer ProgressMap.Delete(job.UserID)
 	var duration float64
 	var err error
 
@@ -187,6 +209,10 @@ func (q *JobQueue) runFFmpegJob(job *FFmpegJob) error {
 		}
 
 		job.Args = &args
+	}
+
+	if job.UseGPU {
+		*job.Args = addHWAccelFlags(*job.Args)
 	}
 
 	cmd := exec.CommandContext(job.Ctx, "ffmpeg", *job.Args...)

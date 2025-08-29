@@ -72,7 +72,7 @@ func (u *Uploader) Do(p, name, userID string, override ...string) (*model.File, 
 	// Thumbnail upload
 	go func() {
 		defer wg.Done()
-		zap.L().Debug("Starting upload subprocess", zap.String("?", "thumbnail"))
+		zap.L().Debug("Starting upload_thumbnail subprocess")
 
 		_, err := u.S3.C.PutObject(ctx, &s3.PutObjectInput{
 			Bucket:       u.S3.Bucket,
@@ -93,7 +93,7 @@ func (u *Uploader) Do(p, name, userID string, override ...string) (*model.File, 
 	// Video upload
 	go func() {
 		defer wg.Done()
-		zap.L().Debug("Starting upload subprocess", zap.String("for", "video"))
+		zap.L().Debug("Starting upload_video subprocess")
 
 		var uploader *manager.Uploader
 		if videoStat.Size() > minMultipartSize {
@@ -131,7 +131,7 @@ func (u *Uploader) Do(p, name, userID string, override ...string) (*model.File, 
 
 	go func() {
 		defer wg.Done()
-		zap.L().Debug("Starting upload subprocess", zap.String("for", "duration"))
+		zap.L().Debug("Starting ffprobe_duration subprocess")
 		var err error
 
 		duration, err = GetDuration(p)
