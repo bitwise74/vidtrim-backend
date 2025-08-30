@@ -2,7 +2,7 @@
 package db
 
 import (
-	"bitwise74/video-api/model"
+	"bitwise74/video-api/internal/model"
 	"fmt"
 
 	"gorm.io/driver/sqlite"

@@ -3,7 +3,7 @@
 package config
 
 import (
-	"bitwise74/video-api/util"
+	"bitwise74/video-api/pkg/util"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
