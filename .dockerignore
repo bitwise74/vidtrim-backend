@@ -1,6 +1,6 @@
 config.toml
 .vscode
 database.db
-docker-compose.yml
 config-example.toml
-docker-compose.example.yml
+.env
+.env.example
