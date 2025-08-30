@@ -1,6 +1,6 @@
-config.toml
-.vscode
-database.db
-config-example.toml
+.github
 .env
 .env.example
+database.db
+vidsh
+video-api
